@@ -1,0 +1,10 @@
+{
+  "name": "issue-tuner",
+  "interface": {"displayName": "Issue Tuner"},
+  "plugins": [{
+    "name": "issue-tuner",
+    "source": {"source": "local", "path": "./plugins/issue-tuner"},
+    "policy": {"installation": "AVAILABLE", "authentication": "ON_USE"},
+    "category": "Developer Tools"
+  }]
+}

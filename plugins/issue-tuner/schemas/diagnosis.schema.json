@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["status", "root_cause", "evidence", "symbols", "blockers"],
+  "additionalProperties": false,
+  "properties": {
+    "status": {"type": "string", "minLength": 1, "enum": ["diagnosed", "blocked"]},
+    "root_cause": {"type": "string", "minLength": 1},
+    "evidence": {"type": "array", "items": {"type": "string"}},
+    "symbols": {"type": "array", "items": {"type": "string"}},
+    "blockers": {"type": "array", "items": {"type": "string"}}
+  }
+}

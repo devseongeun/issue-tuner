@@ -1,0 +1,21 @@
+{
+  "issue": {
+    "id": "DEMO-123",
+    "expected": "Saving preserves the entered title.",
+    "actual": "Saving clears the entered title.",
+    "steps": ["Open a draft.", "Enter a title.", "Save the draft."]
+  },
+  "environment": {
+    "name": "staging",
+    "target": "https://staging.example.invalid"
+  },
+  "context": {
+    "product": "Demo Workspace",
+    "product_version": "0.1.0",
+    "business_project": "Issue Tuner Demo"
+  },
+  "repositories": [
+    {"name": "web-app", "path": "./web-app", "branch": "main"}
+  ],
+  "verification": {"channels": ["browser"]}
+}

@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Unit tests
+        run: python3 -m unittest discover -s plugins/issue-tuner/tests
+      - name: Public safety
+        run: python3 plugins/issue-tuner/scripts/check_public_safety.py .
+      - name: JSON validity
+        run: python3 -c 'import json,pathlib; [json.load(path.open()) for path in pathlib.Path(".").rglob("*.json") if ".git" not in path.parts]'

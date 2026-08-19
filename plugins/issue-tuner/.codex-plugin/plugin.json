@@ -1,0 +1,23 @@
+{
+  "name": "issue-tuner",
+  "version": "0.1.0",
+  "description": "재현 가능한 문제를 재현, 진단, 수정하고 독립 검증하는 안전한 Codex 워크플로",
+  "author": {"name": "Seongeun Kim", "url": "https://github.com/devseongeun"},
+  "homepage": "https://github.com/devseongeun/issue-tuner",
+  "repository": "https://github.com/devseongeun/issue-tuner",
+  "license": "MIT",
+  "keywords": ["issue", "defect", "debugging", "jira", "codex"],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Issue Tuner",
+    "shortDescription": "문제를 재현하고 안전하게 조치합니다.",
+    "longDescription": "재현, 진단, 최소 수정과 독립 검증을 거쳐 사용자 승인 후 Draft PR 또는 MR을 만듭니다.",
+    "developerName": "Seongeun Kim",
+    "category": "Developer Tools",
+    "capabilities": ["Interactive", "Write"],
+    "websiteURL": "https://github.com/devseongeun/issue-tuner",
+    "defaultPrompt": ["Issue Tuner로 이 이슈를 조치해줘.", "이 Issue Report를 재현하고 진단해줘.", "검증된 변경으로 Draft PR을 준비해줘."],
+    "brandColor": "#315C45"
+  }
+}

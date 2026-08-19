@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["status", "source", "scenario", "limitations", "blockers"],
+  "additionalProperties": false,
+  "properties": {
+    "status": {"type": "string", "minLength": 1, "enum": ["reproduced", "failed", "blocked"]},
+    "source": {"type": "string", "minLength": 1, "enum": ["automated", "user_confirmed"]},
+    "scenario": {"type": "string", "minLength": 1},
+    "limitations": {"type": "array", "items": {"type": "string"}},
+    "blockers": {"type": "array", "items": {"type": "string"}}
+  }
+}

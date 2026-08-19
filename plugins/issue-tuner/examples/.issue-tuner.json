@@ -1,0 +1,6 @@
+{
+  "runtime": {
+    "start": "python3 -m http.server ${PORT}",
+    "ready_path": "/"
+  }
+}
