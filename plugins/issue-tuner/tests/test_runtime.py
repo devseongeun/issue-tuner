@@ -14,7 +14,8 @@ runtime = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(runtime)
 
 
-CONFIG = {"runtime": {"start": "python3 -m http.server ${PORT}", "ready_path": "/"}}
+PYTHON = "/usr/bin/python3"
+CONFIG = {"runtime": {"start": f"{PYTHON} -m http.server ${{PORT}}", "ready_path": "/"}}
 
 
 class RuntimeTest(unittest.TestCase):
@@ -47,7 +48,7 @@ class RuntimeTest(unittest.TestCase):
                 record = runtime.start_runtime(
                     worktree,
                     run_dir,
-                    {"runtime": {"start": "python3 wrapper.py ${PORT}", "ready_path": "/"}},
+                    {"runtime": {"start": f"{PYTHON} wrapper.py ${{PORT}}", "ready_path": "/"}},
                     home=home,
                 )
                 listeners = runtime._listener_pids(record["port"])
