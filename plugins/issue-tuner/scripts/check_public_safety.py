@@ -5,6 +5,9 @@ from pathlib import Path
 
 
 FORBIDDEN_EXTENSIONS = {".log", ".png", ".jpg", ".jpeg", ".har", ".trace", ".zip"}
+# 저장소에 의도적으로 포함하는 문서 이미지 경로. 실행 evidence 스크린샷과 구분한다.
+DOC_ASSET_PARTS = ("docs", "assets")
+DOC_ASSET_EXTENSIONS = {".png", ".jpg", ".jpeg"}
 TEXT_EXTENSIONS = {".md", ".json", ".py", ".sh", ".yml", ".yaml", ".txt"}
 SECRET_PATTERNS = (
     re.compile(r"(?im)^\s*Authorization\s*:"),
@@ -33,7 +36,12 @@ def scan(root: Path) -> list[str]:
 
         display = relative.as_posix()
         extension = path.suffix.lower()
-        if extension in FORBIDDEN_EXTENSIONS:
+        # docs/assets/ 아래 이미지는 문서용으로 허용하되 log·har·zip은 그대로 막는다.
+        is_doc_asset = (
+            relative.parts[: len(DOC_ASSET_PARTS)] == DOC_ASSET_PARTS
+            and extension in DOC_ASSET_EXTENSIONS
+        )
+        if extension in FORBIDDEN_EXTENSIONS and not is_doc_asset:
             findings.append(f"{display}: forbidden artifact extension")
 
         text = ["/" + display]

@@ -23,17 +23,20 @@ class PublicDocsTests(unittest.TestCase):
 
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         for phrase in (
-            "AIOSS",
+            "Codex 기준",
+            "Claude 지원",
             "Issue Report Form",
-            "설치된 Jira connector",
-            "connector가 없으면 Issue Report Form",
+            "Jira connector가 설치",
+            "connector가 없을 때",
             "macOS",
             "Computer Use",
             "사용자 직접",
             "uv",
             "Serena",
-            "외부 경로",
+            "저장소 밖",
             "최종 게시 승인",
+            "승인받지 못하면",
+            "docs/assets/issue-tuner-flow.png",
             "$issue-tuner",
             ".issue-tuner.json",
             "Reproducer",
@@ -43,6 +46,7 @@ class PublicDocsTests(unittest.TestCase):
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, readme)
+        self.assertNotIn("AIOSS", readme)
 
         combined = "\n".join(
             path.read_text(encoding="utf-8")
