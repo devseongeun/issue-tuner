@@ -16,7 +16,7 @@ UI 검증에는 Codex host의 `Computer Use`를 먼저 씁니다. 사용할 수 
 
 ## 처리 흐름
 
-<img src="docs/assets/issue-tuner-flow.svg" alt="Issue 입력부터 재현, 진단, 수정, 독립 검증, 게시 승인까지 이어지며 미승인 시 보완 후 승인을 다시 요청하는 Issue Tuner 흐름" width="720">
+<img src="docs/assets/issue-tuner-flow.png" alt="Issue 입력부터 재현, 진단, 수정, 독립 검증, 게시 승인까지 이어지며 미승인 시 보완 후 승인을 다시 요청하는 Issue Tuner 흐름" width="720">
 
 ## 설치
 
