@@ -36,7 +36,7 @@ class PublicDocsTests(unittest.TestCase):
             "저장소 밖",
             "최종 게시 승인",
             "승인받지 못하면",
-            "docs/assets/issue-tuner-flow.svg",
+            "docs/assets/issue-tuner-flow.png",
             "$issue-tuner",
             ".issue-tuner.json",
             "Reproducer",

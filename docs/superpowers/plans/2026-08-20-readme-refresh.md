@@ -4,26 +4,26 @@
 
 **Goal:** README의 지원 범위와 Issue Tuner 처리 흐름을 자연스러운 한국어와 정적 이미지로 설명한다.
 
-**Architecture:** 제품 동작은 건드리지 않는다. `README.md`는 설명과 이미지 참조만 맡고, `docs/assets/issue-tuner-flow.svg`는 입력부터 승인까지의 수직 흐름과 미승인 반복 경로를 담는다.
+**Architecture:** 제품 동작은 건드리지 않는다. `README.md`는 설명과 이미지 참조만 맡고, `docs/assets/issue-tuner-flow.png`는 입력부터 승인까지의 수직 흐름과 미승인 반복 경로를 담는다.
 
-**Tech Stack:** Markdown, SVG 1.1, Python 표준 라이브러리 XML parser
+**Tech Stack:** Markdown, PNG
 
 ---
 
 ### Task 1: 처리 흐름 이미지
 
 **Files:**
-- Create: `docs/assets/issue-tuner-flow.svg`
+- Create: `docs/assets/issue-tuner-flow.png`
 
-- [x] **Step 1: SVG를 작성한다**
+- [x] **Step 1: PNG를 추가한다**
 
-  720×1040 캔버스에 `Jira / Issue Report 입력`, `Reproducer · 재현`, `Diagnoser · 진단`, `Implementer · 수정`, `Verifier · 독립 검증`, `게시 승인 요청`을 세로로 배치한다. 승인 화살표는 `Draft PR/MR`로, 미승인 화살표는 `요청 보완`을 거쳐 `게시 승인 요청`으로 돌아가게 한다. `<title>`과 `<desc>`를 포함한다.
+  2080×2920 이미지에 `Jira / Issue Report 입력`, `Reproducer · 재현`, `Diagnoser · 진단`, `Implementer · 수정`, `Verifier · 독립 검증`, `게시 승인 요청`을 세로로 배치한다. 승인 화살표는 `Draft PR/MR`로, 미승인 화살표는 `요청 보완`을 거쳐 `게시 승인 요청`으로 돌아가게 한다.
 
-- [x] **Step 2: XML 문법을 검사한다**
+- [x] **Step 2: PNG 형식과 크기를 검사한다**
 
-  Run: `python3 -c 'import xml.etree.ElementTree as ET; ET.parse("docs/assets/issue-tuner-flow.svg")'`
+  Run: `file docs/assets/issue-tuner-flow.png && sips -g pixelWidth -g pixelHeight docs/assets/issue-tuner-flow.png`
 
-  Expected: exit code 0, no output
+  Expected: PNG, 2080×2920
 
 ### Task 2: README 개편과 윤문
 
@@ -45,7 +45,7 @@
   ```markdown
   ## 처리 흐름
 
-  <img src="docs/assets/issue-tuner-flow.svg" alt="Issue 입력부터 재현, 진단, 수정, 독립 검증, 게시 승인까지 이어지며 미승인 시 보완 후 승인을 다시 요청하는 Issue Tuner 흐름" width="720">
+  <img src="docs/assets/issue-tuner-flow.png" alt="Issue 입력부터 재현, 진단, 수정, 독립 검증, 게시 승인까지 이어지며 미승인 시 보완 후 승인을 다시 요청하는 Issue Tuner 흐름" width="720">
   ```
 
 - [x] **Step 2: 한국어 문장을 보수적으로 윤문한다**
@@ -56,10 +56,10 @@
 
   README의 고정 문구를 검사하는 테스트는 새 지원 문구와 이미지 경로를 확인하고, README에 `AIOSS`가 남지 않았는지 검사하도록 갱신한다.
 
-  Run: `rg -n "Codex 기준|Claude 지원|issue-tuner-flow.svg" README.md && ! rg -n "AIOSS" README.md`
+  Run: `rg -n "Codex 기준|Claude 지원|issue-tuner-flow.png" README.md && ! rg -n "AIOSS" README.md`
 
   Expected: 앞의 세 패턴은 검색되고 `AIOSS`는 검색되지 않는다.
 
-  Run: `git diff --check -- README.md docs/assets/issue-tuner-flow.svg`
+  Run: `git diff --check -- README.md docs/assets/issue-tuner-flow.png`
 
   Expected: exit code 0, no output
