@@ -40,6 +40,11 @@ Codex에 Jira 키나 URL을 전달합니다. [`plugins/issue-tuner/examples/issu
 
 Issue Tuner는 `Reproducer` → `Diagnoser` → `Implementer` → `Verifier`로 역할을 나눠 재현, 진단, 최소 수정, 독립 검증을 수행합니다.
 
+- **Reproducer** — 보고된 재현 단계를 새 context에서 그대로 따라가 이슈가 실제로 일어나는지 확인합니다.
+- **Diagnoser** — 저장소를 읽기만 하면서 정책과 테스트, 구현과 호출부를 훑어 근본 원인을 한 곳으로 좁힙니다.
+- **Implementer** — 실패하는 회귀 테스트를 먼저 세워 두고, 그 테스트를 통과시킬 최소한의 수정만 합니다.
+- **Verifier** — 수정한 맥락을 물려받지 않은 새 context에서 검증 채널을 다시 돌려 게시해도 되는지 판정합니다.
+
 Issue Report Form의 핵심 항목은 다음과 같습니다.
 
 - 기대 결과, 실제 결과, 재현 단계
