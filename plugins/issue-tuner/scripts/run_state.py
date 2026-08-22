@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
+import argparse
 import json
 import os
 from pathlib import Path
 import re
+import sys
 import tempfile
 
 
@@ -194,3 +196,76 @@ def finish(run_id: str, now: int, home=None) -> dict:
     _save(state, run_id, home)
     _write_json(_run_dir(run_id, home) / "metrics.json", _metrics(state))
     return state
+
+
+def _artifact_parts(relative_path):
+    if not isinstance(relative_path, str) or not relative_path:
+        raise ValueError("artifact path must be a non-empty relative path")
+    path = Path(relative_path)
+    if path.is_absolute():
+        raise ValueError("artifact path must be relative")
+    parts = path.parts
+    if not parts or any(part in {"", ".", ".."} for part in parts):
+        raise ValueError("artifact path must not contain empty, dot, or traversal components")
+    return parts
+
+
+def artifact_path(run_id, relative_path, home=None):
+    state = _load(run_id, home)
+    run_directory = _run_dir(run_id, home)
+    parts = _artifact_parts(relative_path)
+    target = run_directory.joinpath(*parts)
+    resolved_run = run_directory.resolve()
+    try:
+        target.resolve(strict=False).relative_to(resolved_run)
+    except ValueError:
+        raise ValueError("artifact path escapes run directory") from None
+
+    current = run_directory
+    for part in parts[:-1]:
+        current = current / part
+        if current.is_symlink():
+            raise ValueError("artifact parent must not be a symlink")
+        if current.exists() and not current.is_dir():
+            raise ValueError("artifact parent must be a directory")
+        try:
+            current.resolve(strict=False).relative_to(resolved_run)
+        except ValueError:
+            raise ValueError("artifact parent escapes run directory") from None
+    if target.is_symlink():
+        raise ValueError("artifact target must not be a symlink")
+    if state["status"] == "finished":
+        raise ValueError("finished runs cannot write artifacts")
+    return target
+
+
+def write_artifact(run_id, relative_path, data, home=None):
+    if not isinstance(data, dict):
+        raise ValueError("artifact data must be a JSON object")
+    path = artifact_path(run_id, relative_path, home)
+    _write_json(path, data)
+    return path
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser()
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    writer = subparsers.add_parser("write-artifact")
+    writer.add_argument("home")
+    writer.add_argument("run_id")
+    writer.add_argument("relative_path")
+    args = parser.parse_args(argv)
+
+    if args.command == "write-artifact":
+        try:
+            data = json.load(sys.stdin)
+            path = write_artifact(args.run_id, args.relative_path, data, Path(args.home))
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            parser.error(str(error))
+        print(path)
+        return 0
+    parser.error("unknown command")
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

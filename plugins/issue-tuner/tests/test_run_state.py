@@ -2,6 +2,8 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -160,6 +162,167 @@ class RunStateTest(unittest.TestCase):
                 with self.assertRaises(KeyboardInterrupt):
                     run_state._write_json(target, {"value": "ok"})
             self.assertEqual(list(Path(directory).iterdir()), [])
+
+    def test_writes_and_rewrites_run_artifacts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            run_state.create("demo-run", 100, home)
+
+            path = run_state.write_artifact("demo-run", "reproduction.json", {"status": "failed"}, home)
+            self.assertEqual(path, (home / "runs" / "demo-run" / "reproduction.json").resolve())
+            self.assertEqual(json.loads(path.read_text()), {"status": "failed"})
+
+            rewritten = run_state.write_artifact("demo-run", "reproduction.json", {"status": "reproduced"}, home)
+            self.assertEqual(rewritten, path)
+            self.assertEqual(json.loads(path.read_text()), {"status": "reproduced"})
+
+            nested = run_state.write_artifact(
+                "demo-run",
+                "repositories/app/verification.json",
+                {"status": "pass"},
+                home,
+            )
+            self.assertEqual(
+                nested,
+                (home / "runs" / "demo-run" / "repositories" / "app" / "verification.json").resolve(),
+            )
+            self.assertEqual(json.loads(nested.read_text()), {"status": "pass"})
+
+    def test_rejects_invalid_artifact_data_and_finished_runs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            run_state.create("demo-run", 100, home)
+
+            with self.assertRaises(ValueError):
+                run_state.write_artifact("demo-run", "reproduction.json", [], home)
+            self.assertFalse((home / "runs" / "demo-run" / "reproduction.json").exists())
+
+            run_state.finish("demo-run", 120, home)
+            with self.assertRaises(ValueError):
+                run_state.write_artifact("demo-run", "reproduction.json", {"status": "late"}, home)
+            self.assertFalse((home / "runs" / "demo-run" / "reproduction.json").exists())
+
+    def test_rejects_artifact_write_when_saved_run_id_mismatches(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            run_state.create("demo-run", 100, home)
+            state_path = home / "runs" / "demo-run" / "state.json"
+            state = json.loads(state_path.read_text())
+            state["run_id"] = "other-run"
+            state_path.write_text(json.dumps(state))
+
+            with self.assertRaises(ValueError):
+                run_state.write_artifact("demo-run", "reproduction.json", {"status": "bad"}, home)
+            self.assertFalse((home / "runs" / "demo-run" / "reproduction.json").exists())
+
+    def test_rejects_unsafe_artifact_paths_without_changing_outside_targets(self):
+        with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory() as outside:
+            home = Path(directory)
+            outside_path = Path(outside) / "reproduction.json"
+            outside_path.write_text("outside\n")
+            run_state.create("demo-run", 100, home)
+
+            for relative_path in ["", ".", "./.", "/tmp/reproduction.json", "../outside/reproduction.json", "repo/../../outside"]:
+                with self.subTest(relative_path=relative_path):
+                    with self.assertRaises(ValueError):
+                        run_state.artifact_path("demo-run", relative_path, home)
+                    with self.assertRaises(ValueError):
+                        run_state.write_artifact("demo-run", relative_path, {"status": "bad"}, home)
+
+            self.assertEqual(outside_path.read_text(), "outside\n")
+
+    def test_rejects_artifact_symlink_parent_and_target_without_changing_outside_targets(self):
+        with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory() as outside:
+            home = Path(directory)
+            outside = Path(outside)
+            run_state.create("demo-run", 100, home)
+            run_dir = home / "runs" / "demo-run"
+
+            parent_target = outside / "parent-target"
+            parent_target.mkdir()
+            os.symlink(parent_target, run_dir / "repositories")
+            with self.assertRaises(ValueError):
+                run_state.write_artifact("demo-run", "repositories/app/verification.json", {"status": "bad"}, home)
+            self.assertFalse((parent_target / "app" / "verification.json").exists())
+
+            (run_dir / "repositories").unlink()
+            outside_file = outside / "reproduction.json"
+            outside_file.write_text("outside\n")
+            os.symlink(outside_file, run_dir / "reproduction.json")
+            with self.assertRaises(ValueError):
+                run_state.write_artifact("demo-run", "reproduction.json", {"status": "bad"}, home)
+            self.assertEqual(outside_file.read_text(), "outside\n")
+
+    def test_write_artifact_cli_reads_json_from_stdin_and_prints_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            run_state.create("demo-run", 100, home)
+
+            result = subprocess.run(
+                [sys.executable, str(SCRIPT), "write-artifact", str(home), "demo-run", "reproduction.json"],
+                input='{"status":"ok"}',
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            expected = (home / "runs" / "demo-run" / "reproduction.json").resolve()
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, f"{expected}\n")
+            self.assertEqual(json.loads(expected.read_text()), {"status": "ok"})
+
+    def test_write_artifact_cli_rejects_invalid_input_paths_and_json_argv(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            run_state.create("demo-run", 100, home)
+
+            invalid_json = subprocess.run(
+                [sys.executable, str(SCRIPT), "write-artifact", str(home), "demo-run", "reproduction.json"],
+                input="[]",
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(invalid_json.returncode, 2)
+            self.assertFalse((home / "runs" / "demo-run" / "reproduction.json").exists())
+
+            malformed_json = subprocess.run(
+                [sys.executable, str(SCRIPT), "write-artifact", str(home), "demo-run", "reproduction.json"],
+                input="{",
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(malformed_json.returncode, 2)
+            self.assertFalse((home / "runs" / "demo-run" / "reproduction.json").exists())
+
+            unsafe_path = subprocess.run(
+                [sys.executable, str(SCRIPT), "write-artifact", str(home), "demo-run", "../escape.json"],
+                input='{"status":"bad"}',
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(unsafe_path.returncode, 2)
+            self.assertFalse((home / "runs" / "escape.json").exists())
+
+            json_argv = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "write-artifact",
+                    str(home),
+                    "demo-run",
+                    "reproduction.json",
+                    '{"status":"bad"}',
+                ],
+                input="",
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(json_argv.returncode, 2)
+            self.assertFalse((home / "runs" / "demo-run" / "reproduction.json").exists())
 
 
 if __name__ == "__main__":
