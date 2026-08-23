@@ -210,10 +210,24 @@ def _artifact_parts(relative_path):
     return parts
 
 
+def _check_artifact_role(parts):
+    if parts in {("reproduction.json",), ("diagnosis.json",)}:
+        return
+    if (
+        len(parts) == 3
+        and parts[0] == "repositories"
+        and SAFE_RUN_ID.fullmatch(parts[1])
+        and parts[2] in {"implementation.json", "verification.json"}
+    ):
+        return
+    raise ValueError("artifact path is not an allowed Issue Tuner role artifact")
+
+
 def artifact_path(run_id, relative_path, home=None):
     state = _load(run_id, home)
     run_directory = _run_dir(run_id, home)
     parts = _artifact_parts(relative_path)
+    _check_artifact_role(parts)
     target = run_directory.joinpath(*parts)
     resolved_run = run_directory.resolve()
     try:

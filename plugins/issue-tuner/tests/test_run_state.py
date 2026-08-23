@@ -188,6 +188,52 @@ class RunStateTest(unittest.TestCase):
             )
             self.assertEqual(json.loads(nested.read_text()), {"status": "pass"})
 
+            diagnosis = run_state.write_artifact("demo-run", "diagnosis.json", {"root_cause": "found"}, home)
+            self.assertEqual(diagnosis, (home / "runs" / "demo-run" / "diagnosis.json").resolve())
+            self.assertEqual(json.loads(diagnosis.read_text()), {"root_cause": "found"})
+
+            implementation = run_state.write_artifact(
+                "demo-run",
+                "repositories/app/implementation.json",
+                {"status": "implemented"},
+                home,
+            )
+            self.assertEqual(
+                implementation,
+                (home / "runs" / "demo-run" / "repositories" / "app" / "implementation.json").resolve(),
+            )
+            self.assertEqual(json.loads(implementation.read_text()), {"status": "implemented"})
+
+    def test_rejects_control_and_non_role_artifact_paths_without_changing_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            run_state.create("demo-run", 100, home)
+            state_path = home / "runs" / "demo-run" / "state.json"
+            original_state = state_path.read_text()
+
+            for relative_path in [
+                "state.json",
+                "metrics.json",
+                "runtime/process.json",
+                "repositories/app/commit-gate.json",
+                "repositories/app/public-artifacts/pr-body.md",
+                "repositories/app/nested/verification.json",
+                "repositories/app",
+                "repositories/implementation.json",
+                "repositories/./verification.json",
+                "repositories/../verification.json",
+                "repositories/app/diagnosis.json",
+                "repositories/app/verification.txt",
+            ]:
+                with self.subTest(relative_path=relative_path):
+                    with self.assertRaises(ValueError):
+                        run_state.write_artifact("demo-run", relative_path, {"status": "bad"}, home)
+
+            self.assertEqual(state_path.read_text(), original_state)
+            self.assertFalse((home / "runs" / "demo-run" / "metrics.json").exists())
+            self.assertFalse((home / "runs" / "demo-run" / "runtime").exists())
+            self.assertFalse((home / "runs" / "demo-run" / "repositories" / "app").exists())
+
     def test_rejects_invalid_artifact_data_and_finished_runs(self):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
