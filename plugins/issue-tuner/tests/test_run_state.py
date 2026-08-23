@@ -14,6 +14,48 @@ SPEC.loader.exec_module(run_state)
 
 
 class RunStateTest(unittest.TestCase):
+    def test_records_first_resolution_and_calculates_work_and_wait_time(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            run_state.create("demo-run", 100, home)
+            run_state.pause("demo-run", 110, home)
+            run_state.resume("demo-run", 130, home)
+
+            state = run_state.resolve("demo-run", 150, "automated", home)
+            self.assertEqual(state["resolved_at"], 150)
+            self.assertEqual(state["resolution_source"], "automated")
+            self.assertEqual(state["work_seconds"], 30)
+            self.assertEqual(state["wait_seconds"], 20)
+
+            state = run_state.resolve("demo-run", 160, "user_confirmed", home)
+            self.assertEqual(state["resolved_at"], 150)
+            self.assertEqual(state["resolution_source"], "automated")
+
+            state = run_state.finish("demo-run", 170, home)
+            self.assertEqual(state["finished_at"], 170)
+            self.assertEqual(state["elapsed_seconds"], 70)
+            metrics = json.loads((home / "runs" / "demo-run" / "metrics.json").read_text())
+            self.assertEqual(metrics["started_at"], 100)
+            self.assertEqual(metrics["resolved_at"], 150)
+            self.assertEqual(metrics["finished_at"], 170)
+            self.assertEqual(metrics["resolution_source"], "automated")
+            self.assertEqual(metrics["work_seconds"], 30)
+            self.assertEqual(metrics["wait_seconds"], 20)
+            self.assertEqual(metrics["cleanup_seconds"], 20)
+            self.assertEqual(
+                metrics["work_seconds"] + metrics["wait_seconds"] + metrics["cleanup_seconds"],
+                metrics["elapsed_seconds"],
+            )
+
+    def test_accepts_user_confirmed_resolution(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            run_state.create("demo-run", 100, home)
+
+            state = run_state.resolve("demo-run", 110, "user_confirmed", home)
+
+            self.assertEqual(state["resolution_source"], "user_confirmed")
+
     def test_tracks_paused_time_and_writes_per_run_metrics_outside_repo(self):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
