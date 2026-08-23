@@ -139,7 +139,11 @@ class SkillContractTest(unittest.TestCase):
             with self.subTest(call=call):
                 self.assertIn(call, self.skill)
         self.assertIn(
-            "run_state.py, git_context.py, runtime.py, publish.py만 library-only",
+            "git_context.py, runtime.py, publish.py만 library-only",
+            self.skill,
+        )
+        self.assertIn(
+            "run_state.py는 library API와 artifact writer CLI 예외만 허용",
             self.skill,
         )
         self.assertNotIn("commit_gate.py, publish.py`는 Python module/function이며 standalone CLI가 아니다", self.skill)
@@ -148,6 +152,32 @@ class SkillContractTest(unittest.TestCase):
             "python3 <plugin-root>/scripts/validate_contract.py issue-report <run>/issue-report.json",
             self.skill,
         )
+
+    def test_run_state_artifact_writer_has_bounded_cli_contract(self):
+        command = (
+            "python3 <plugin-root>/scripts/run_state.py write-artifact "
+            "<absolute-home> <run-id> <relative-path>"
+        )
+        prefix = (
+            "python3 <plugin-root>/scripts/run_state.py write-artifact "
+            "<absolute-home> <run-id>"
+        )
+
+        self.assertIn(command, self.skill)
+        self.assertIn(f"approval prefix: `{prefix}`", self.skill)
+        self.assertRegex(
+            self.skill,
+            r"초기 실행 준비 확인.*고정 per-run artifact writer prefix.*한 번",
+        )
+        self.assertRegex(
+            self.skill,
+            r"같은 run.*shared/repository role JSON artifact.*반복 file-modification approval 없이",
+        )
+        self.assertRegex(
+            self.skill,
+            r"JSON.*stdin.*artifact path.*현재 run 기준 relative path",
+        )
+        self.assertIn("target worktree 쓰기는 이미 확인된 flow 밖에서 금지", self.skill)
 
     def test_publish_executes_only_returned_command_and_verifies_draft_url(self):
         self.assertIn(

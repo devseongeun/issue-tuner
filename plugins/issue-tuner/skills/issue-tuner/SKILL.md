@@ -7,12 +7,12 @@ description: Use when Jira 키·URL 또는 Issue Report로 재현 가능한 버�
 
 `Reproducer`/`Diagnoser`/`Implementer`/`Verifier`가 재현→진단→구현→검증한다. `Orchestrator`는 state, gate, 사용자 확인·승인을 관리하지만 role 판단을 대체하지 않는다. `references/*.md`를 따른다.
 
-run_state.py, git_context.py, runtime.py, publish.py만 library-only다. `commit_gate.py`는 CLI다; `run_state.create/pause/resume/finish`, `git_context.detect/create_worktree`, `runtime.start_runtime/stop_owned_process`, `commit_gate.record/check`, `publish.host_kind/draft_command`를 쓰고 모든 return과 error를 확인한다.
+git_context.py, runtime.py, publish.py만 library-only다. run_state.py는 library API와 artifact writer CLI 예외만 허용한다. `commit_gate.py`는 CLI다; `run_state.create/pause/resume/finish`, `git_context.detect/create_worktree`, `runtime.start_runtime/stop_owned_process`, `commit_gate.record/check`, `publish.host_kind/draft_command`를 쓰고 모든 return과 error를 확인한다.
 
 ## Workflow
 
 1. Jira 키·URL은 Jira connector, 없으면 `Issue Report Form`으로 받는다. 누락값을 만들지 말고 `<run>/issue-report.json`으로 정규화해 `python3 <plugin-root>/scripts/validate_contract.py issue-report <run>/issue-report.json`을 실행한다.
-2. `git_context.detect`로 저장소·현재 branch를 탐지하고 환경·issue별 채널과 `fix/<issue-id>`를 제안한다. worktree/runtime/수정 전 사용자 확인은 확인된 준비·조치만 승인하며 게시 승인이 아니다.
+2. `git_context.detect`로 저장소·현재 branch를 탐지하고 환경·issue별 채널과 `fix/<issue-id>`를 제안한다. worktree/runtime/수정 전 초기 실행 준비 확인은 확인된 준비·조치만 승인하며 게시 승인이 아니다. 이 확인은 고정 per-run artifact writer prefix를 한 번 허용한다: `python3 <plugin-root>/scripts/run_state.py write-artifact <absolute-home> <run-id> <relative-path>`; approval prefix: `python3 <plugin-root>/scripts/run_state.py write-artifact <absolute-home> <run-id>`. JSON은 stdin으로만 전달하고 artifact path는 현재 run 기준 relative path다. 같은 run의 shared/repository role JSON artifact update는 반복 file-modification approval 없이 이 prefix를 쓴다. target worktree 쓰기는 이미 확인된 flow 밖에서 금지하며, production mutation과 commit/push/Draft/merge/deploy/pipeline/reviewer authority는 포함하지 않는다.
 3. `production`은 read-only 관찰/snapshot/비변경 log만 허용한다. 승인해도 click/type/상태 변경 API/data mutation은 금지한다.
 4. `run_state.create` 후 repo마다 `git_context.create_worktree`를 호출한다. 공유: `<run>/reproduction.json`, `<run>/diagnosis.json`; repo별: `<run>/repositories/<repo-name>/implementation.json`, `<run>/repositories/<repo-name>/verification.json`, `<run>/repositories/<repo-name>/commit-gate.json`. verification/gate를 다른 repo root에 재사용하지 않는다.
 5. `.issue-tuner.json`이 없으면 한 번 묻고 추론하지 않는다. `runtime.start_runtime`을 쓴다. UI는 host Codex `Computer Use`를 fresh Reproducer/Verifier context에서 사용한다. 이동/redirect 전후 `origin`과 `environment.target`이 다르면 중단한다. credential은 취급하지 않는다. 로그인 시 `run_state.pause`, 사용자 직접 로그인, 긍정 뒤 같은 task/session만 `run_state.resume`한다. Computer Use 불가/차단은 자동화 채널 실패로 기록하고 사용자 직접 확인을 요청하며 대체 browser automation은 금지한다.
