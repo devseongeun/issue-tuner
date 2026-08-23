@@ -29,6 +29,10 @@ def frontmatter(text):
     )
 
 
+def normalize_whitespace(text):
+    return re.sub(r"\s+", " ", text)
+
+
 class SkillContractTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -154,6 +158,7 @@ class SkillContractTest(unittest.TestCase):
         )
 
     def test_run_state_artifact_writer_has_bounded_cli_contract(self):
+        skill = normalize_whitespace(self.skill)
         command = (
             "python3 <plugin-root>/scripts/run_state.py write-artifact "
             "<absolute-home> <run-id> <relative-path>"
@@ -165,19 +170,38 @@ class SkillContractTest(unittest.TestCase):
 
         self.assertIn(command, self.skill)
         self.assertIn(f"approval prefix: `{prefix}`", self.skill)
-        self.assertRegex(
-            self.skill,
-            r"초기 실행 준비 확인.*고정 per-run artifact writer prefix.*한 번",
+        self.assertIn(
+            "초기 실행 준비 확인은 확인된 준비·조치만 승인하며 게시 승인이 아니다",
+            skill,
         )
-        self.assertRegex(
-            self.skill,
-            r"같은 run.*shared/repository role JSON artifact.*반복 file-modification approval 없이",
+        self.assertIn(
+            "고정 per-run artifact writer prefix를 한 번 허용한다",
+            skill,
         )
-        self.assertRegex(
-            self.skill,
-            r"JSON.*stdin.*artifact path.*현재 run 기준 relative path",
+        self.assertIn(
+            "같은 run의 Issue Tuner-owned shared/repository role JSON artifact update",
+            skill,
+        )
+        self.assertIn(
+            "반복 file-modification approval 없이 이 prefix를 쓴다",
+            skill,
+        )
+        self.assertIn(
+            "JSON은 stdin으로만 전달하고 artifact path는 현재 run 기준 relative path다",
+            skill,
         )
         self.assertIn("target worktree 쓰기는 이미 확인된 flow 밖에서 금지", self.skill)
+
+    def test_final_publication_approval_is_separate_and_not_cached(self):
+        skill = normalize_whitespace(self.skill)
+
+        self.assertIn("게시 승인이 아니다", skill)
+        self.assertIn("한 번의 최종 게시 승인", skill)
+        self.assertIn("이전 긍정은 무효다", skill)
+        self.assertRegex(
+            skill,
+            r"직후 명확한 긍정.*exact stage→gate check→commit→push→Draft",
+        )
 
     def test_publish_executes_only_returned_command_and_verifies_draft_url(self):
         self.assertIn(
