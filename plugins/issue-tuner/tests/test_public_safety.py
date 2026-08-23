@@ -36,6 +36,27 @@ class PublicSafetyTests(unittest.TestCase):
             self.assertIn("debug.log: forbidden artifact extension", findings)
             self.assertIn("secret.txt: secret-like content", findings)
 
+    def test_allows_doc_assets_images_but_still_rejects_other_artifacts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            assets = root / "docs" / "assets"
+            assets.mkdir(parents=True)
+            (assets / "flow.png").touch()
+            (assets / "shot.jpeg").touch()
+            (assets / "trace.har").touch()
+            (assets / "bundle.zip").touch()
+            nested = root / "runs" / "docs" / "assets"
+            nested.mkdir(parents=True)
+            (nested / "evidence.png").touch()
+
+            findings = CHECKER.scan(root)
+
+            self.assertNotIn("docs/assets/flow.png: forbidden artifact extension", findings)
+            self.assertNotIn("docs/assets/shot.jpeg: forbidden artifact extension", findings)
+            self.assertIn("docs/assets/trace.har: forbidden artifact extension", findings)
+            self.assertIn("docs/assets/bundle.zip: forbidden artifact extension", findings)
+            self.assertIn("runs/docs/assets/evidence.png: forbidden artifact extension", findings)
+
     def test_rejects_json_and_compound_secret_keys(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
