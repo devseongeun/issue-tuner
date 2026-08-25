@@ -125,6 +125,7 @@ class SkillContractTest(unittest.TestCase):
             "run_state.create",
             "run_state.pause",
             "run_state.resume",
+            "run_state.resolve",
             "run_state.finish",
             "git_context.detect",
             "git_context.create_worktree",
@@ -148,6 +149,8 @@ class SkillContractTest(unittest.TestCase):
             "python3 <plugin-root>/scripts/validate_contract.py issue-report <run>/issue-report.json",
             self.skill,
         )
+        self.assertIn("`work_seconds`와 `wait_seconds`는 해결 시각까지", self.skill)
+        self.assertIn("`cleanup_seconds`는 해결부터 종료까지", self.skill)
 
     def test_publish_executes_only_returned_command_and_verifies_draft_url(self):
         self.assertIn(

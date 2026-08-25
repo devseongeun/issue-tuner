@@ -102,7 +102,7 @@ def _check_time(state, now):
 
 
 def _metrics(state):
-    return {
+    metrics = {
         "elapsed_seconds": state["elapsed_seconds"],
         "active_seconds": state["active_seconds"],
         "stages": {
@@ -110,6 +110,22 @@ def _metrics(state):
             for name, stage in state["stages"].items()
         },
     }
+    if "resolved_at" in state:
+        metrics.update(
+            {
+                key: state[key]
+                for key in (
+                    "started_at",
+                    "resolved_at",
+                    "finished_at",
+                    "resolution_source",
+                    "work_seconds",
+                    "wait_seconds",
+                )
+            }
+        )
+        metrics["cleanup_seconds"] = state["finished_at"] - state["resolved_at"]
+    return metrics
 
 
 def create(run_id: str, now: int, home=None) -> dict:
@@ -172,6 +188,31 @@ def set_outcome(run_id: str, stage: str, outcome: str, home=None) -> dict:
         raise ValueError("outcome must be a non-empty string")
     state = _load(run_id, home)
     _stage(state, stage)["outcome"] = outcome
+    return _save(state, run_id, home)
+
+
+def resolve(run_id: str, now: int, source: str, home=None) -> dict:
+    _timestamp(now)
+    if source not in {"automated", "user_confirmed"}:
+        raise ValueError("source must be automated or user_confirmed")
+    state = _load(run_id, home)
+    if "resolved_at" in state:
+        return state
+    _check_time(state, now)
+    if state["status"] not in {"running", "paused"}:
+        raise ValueError("only running or paused runs can resolve")
+    work_seconds = state["active_seconds"]
+    if state["status"] == "running":
+        work_seconds += now - state["active_started_at"]
+    state.update(
+        {
+            "resolved_at": now,
+            "resolution_source": source,
+            "work_seconds": work_seconds,
+            "wait_seconds": now - state["started_at"] - work_seconds,
+            "updated_at": now,
+        }
+    )
     return _save(state, run_id, home)
 
 
