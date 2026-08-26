@@ -28,3 +28,12 @@ run_state.py, git_context.py, runtime.py, publish.py만 library-only다. `commit
 
 - external raw evidence인 Issue Report/stage JSON에는 `check_public_safety.py`를 실행하지 않는다.
 - `<run>/repositories/<repo-name>/public-artifacts`에는 public Issue Tuner repo로 넘길 raw artifact가 아닌 sanitized summary인 sanitized Draft PR/MR body만 두고 `python3 <plugin-root>/scripts/check_public_safety.py <run>/repositories/<repo-name>/public-artifacts`로 검사한다. raw run dir 검사는 금지한다.
+
+## Stage Checklist
+
+- 표준 stage는 `issue-report`(1), `reproduction`(6~7), `diagnosis`(8), `implementation`(9), `verification`(10), `publication-approval`(12~13)이다.
+- 단계 전환마다 `run_state.set_stage_status`로 이전 stage를 종료 상태로, 다음 stage를 `in_progress`로 기록하고 `run_state.render_checklist` 결과를 그 전환당 한 번만 표시한다. 같은 전환을 반복 출력하지 않는다.
+- 상태는 6개를 구분해 쓴다: `pending`은 미착수, `in_progress`는 수행 중, `done`은 정상 완료, `failed`는 재현 실패나 검증 fail처럼 결과가 부정인 종료, `blocked`는 사용자 확인·로그인·환경 대기로 진행 불가, `skipped`는 수행 자체가 불필요한 경우다.
+- 진단 결과 코드 변경이 필요 없으면 `implementation`을 `skipped`로 표시하고 다음 stage로 넘어간다.
+- 세션이 바뀌면 첫 응답에서 `run_state.render_checklist`로 저장된 체크리스트를 복원해 표시한 뒤 이어간다.
+- `render_checklist`는 읽기 전용이다. 체크리스트 기록·표시는 기존 run 산출물 쓰기 정책을 따르며 추가 사용자 승인을 요구하지 않는다.

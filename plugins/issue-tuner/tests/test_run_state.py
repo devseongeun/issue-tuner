@@ -203,6 +203,207 @@ class RunStateTest(unittest.TestCase):
                     run_state._write_json(target, {"value": "ok"})
             self.assertEqual(list(Path(directory).iterdir()), [])
 
+    def test_reports_every_stage_as_pending_before_any_status_is_recorded(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            run_state.create("demo-run", 100, home)
+
+            items = run_state.checklist("demo-run", home)
+            self.assertEqual(
+                [item["stage"] for item in items],
+                list(run_state.CHECKLIST_STAGES),
+            )
+            self.assertEqual(
+                [item["label"] for item in items],
+                ["입력 정리", "재현", "진단", "구현", "검증", "게시 승인"],
+            )
+            self.assertEqual({item["status"] for item in items}, {"pending"})
+            self.assertEqual({item["status_label"] for item in items}, {"대기"})
+            self.assertEqual(
+                sorted(items[0]),
+                ["label", "stage", "status", "status_label"],
+            )
+            self.assertEqual(
+                json.loads((home / "runs" / "demo-run" / "state.json").read_text())["stages"],
+                {},
+            )
+
+            rendered = run_state.render_checklist("demo-run", home)
+            lines = rendered.split("\n")
+            self.assertEqual(lines[0], "## 진행 체크리스트")
+            self.assertEqual(len(lines), 7)
+            self.assertEqual(lines[1], "- [ ] 입력 정리 — 대기")
+            self.assertFalse(rendered.endswith("\n"))
+
+    def test_distinguishes_all_six_statuses_with_korean_labels(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            run_state.create("demo-run", 100, home)
+            expected = {
+                "issue-report": "done",
+                "reproduction": "in_progress",
+                "diagnosis": "pending",
+                "implementation": "skipped",
+                "verification": "failed",
+                "publication-approval": "blocked",
+            }
+            for stage, status in expected.items():
+                run_state.set_stage_status("demo-run", stage, status, home)
+
+            items = {item["stage"]: item for item in run_state.checklist("demo-run", home)}
+            self.assertEqual({stage: items[stage]["status"] for stage in expected}, expected)
+            self.assertEqual(
+                {items[stage]["status_label"] for stage in expected},
+                {"완료", "진행 중", "대기", "생략", "실패", "차단됨"},
+            )
+            for stage, status in expected.items():
+                self.assertEqual(
+                    items[stage]["status_label"],
+                    run_state.CHECKLIST_STATUSES[status],
+                )
+
+            rendered = run_state.render_checklist("demo-run", home)
+            self.assertIn("- [x] 입력 정리 — 완료", rendered)
+            self.assertIn("- [~] 재현 — 진행 중", rendered)
+            self.assertIn("- [ ] 진단 — 대기", rendered)
+            self.assertIn("- [!] 검증 — 실패", rendered)
+            self.assertIn("- [-] 게시 승인 — 차단됨", rendered)
+
+    def test_rejects_unknown_stage_status_without_writing_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            run_state.create("demo-run", 100, home)
+            state_path = home / "runs" / "demo-run" / "state.json"
+            snapshot = state_path.read_text()
+
+            for status in ("완료", "done ", "DONE", "", "unknown", None, 3):
+                with self.assertRaises(ValueError):
+                    run_state.set_stage_status("demo-run", "diagnosis", status, home)
+                self.assertEqual(state_path.read_text(), snapshot)
+
+            self.assertEqual(json.loads(snapshot)["stages"], {})
+
+    def test_marks_skipped_implementation_stage_as_saengryak(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            run_state.create("demo-run", 100, home)
+            run_state.set_stage_status("demo-run", "implementation", "skipped", home)
+
+            items = {item["stage"]: item for item in run_state.checklist("demo-run", home)}
+            self.assertEqual(items["implementation"]["status"], "skipped")
+            self.assertEqual(items["implementation"]["status_label"], "생략")
+            self.assertEqual(items["implementation"]["label"], "구현")
+
+            rendered = run_state.render_checklist("demo-run", home)
+            self.assertIn("- [/] 구현 — 생략", rendered.split("\n"))
+            self.assertEqual(
+                json.loads((home / "runs" / "demo-run" / "state.json").read_text())["stages"][
+                    "implementation"
+                ]["status"],
+                "skipped",
+            )
+
+    def test_restores_recorded_statuses_from_disk_in_a_freshly_loaded_module(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            run_state.create("demo-run", 100, home)
+            run_state.set_stage_status("demo-run", "issue-report", "done", home)
+            run_state.set_stage_status("demo-run", "reproduction", "done", home)
+            run_state.set_stage_status("demo-run", "diagnosis", "in_progress", home)
+
+            spec = importlib.util.spec_from_file_location("run_state_reloaded", SCRIPT)
+            reloaded = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(reloaded)
+            self.assertIsNot(reloaded, run_state)
+
+            items = {item["stage"]: item for item in reloaded.checklist("demo-run", home)}
+            self.assertEqual(items["issue-report"]["status"], "done")
+            self.assertEqual(items["reproduction"]["status"], "done")
+            self.assertEqual(items["diagnosis"]["status"], "in_progress")
+            self.assertEqual(items["verification"]["status"], "pending")
+            self.assertEqual(items["diagnosis"]["status_label"], "진행 중")
+            self.assertEqual(
+                reloaded.render_checklist("demo-run", home),
+                run_state.render_checklist("demo-run", home),
+            )
+
+    def test_renders_checklist_without_writing_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            run_state.create("demo-run", 100, home)
+            run_state.set_stage_status("demo-run", "verification", "done", home)
+            state_path = home / "runs" / "demo-run" / "state.json"
+            snapshot = state_path.read_text()
+
+            with patch.object(
+                run_state, "_write_json", side_effect=AssertionError("must not write")
+            ):
+                items = run_state.checklist("demo-run", home)
+                rendered = run_state.render_checklist("demo-run", home)
+
+            self.assertEqual(len(items), len(run_state.CHECKLIST_STAGES))
+            self.assertIn("- [x] 검증 — 완료", rendered.split("\n"))
+            self.assertEqual(state_path.read_text(), snapshot)
+            self.assertFalse((home / "runs" / "demo-run" / "metrics.json").exists())
+
+    def test_appends_unknown_stages_after_known_ones_in_alphabetical_order(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            run_state.create("demo-run", 100, home)
+            run_state.record_attempt("demo-run", "zeta-stage", home)
+            run_state.record_attempt("demo-run", "alpha-stage", home)
+            run_state.set_stage_status("demo-run", "zeta-stage", "done", home)
+
+            items = run_state.checklist("demo-run", home)
+            self.assertEqual(
+                [item["stage"] for item in items],
+                list(run_state.CHECKLIST_STAGES) + ["alpha-stage", "zeta-stage"],
+            )
+            unknown = {item["stage"]: item for item in items[len(run_state.CHECKLIST_STAGES):]}
+            self.assertEqual(unknown["alpha-stage"]["label"], "alpha-stage")
+            self.assertEqual(unknown["alpha-stage"]["status"], "pending")
+            self.assertEqual(unknown["zeta-stage"]["status_label"], "완료")
+
+            lines = run_state.render_checklist("demo-run", home).split("\n")
+            self.assertEqual(lines[-1], "- [x] zeta-stage — 완료")
+            self.assertEqual(lines[-2], "- [ ] alpha-stage — 대기")
+
+    def test_rejects_stage_status_on_finished_run_without_changing_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            run_state.create("demo-run", 100, home)
+            run_state.set_stage_status("demo-run", "diagnosis", "done", home)
+            run_state.finish("demo-run", 150, home)
+            state_path = home / "runs" / "demo-run" / "state.json"
+            snapshot = state_path.read_text()
+
+            with self.assertRaises(ValueError):
+                run_state.set_stage_status("demo-run", "verification", "done", home)
+            self.assertEqual(state_path.read_text(), snapshot)
+
+            items = {item["stage"]: item for item in run_state.checklist("demo-run", home)}
+            self.assertEqual(items["diagnosis"]["status"], "done")
+            self.assertEqual(items["verification"]["status"], "pending")
+
+    def test_carries_stage_status_into_metrics_when_run_finishes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            run_state.create("demo-run", 100, home)
+            run_state.record_attempt("demo-run", "verification", home)
+            run_state.set_outcome("demo-run", "verification", "pass", home)
+            run_state.set_stage_status("demo-run", "verification", "done", home)
+            run_state.set_stage_status("demo-run", "implementation", "skipped", home)
+            run_state.finish("demo-run", 150, home)
+
+            metrics = json.loads((home / "runs" / "demo-run" / "metrics.json").read_text())
+            self.assertEqual(
+                metrics["stages"],
+                {
+                    "verification": {"attempts": 1, "outcome": "pass", "status": "done"},
+                    "implementation": {"attempts": 0, "status": "skipped"},
+                },
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
