@@ -8,6 +8,42 @@ import tempfile
 
 SAFE_RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 
+CHECKLIST_STAGES = (
+    "issue-report",
+    "reproduction",
+    "diagnosis",
+    "implementation",
+    "verification",
+    "publication-approval",
+)
+
+STAGE_LABELS = {
+    "issue-report": "입력 정리",
+    "reproduction": "재현",
+    "diagnosis": "진단",
+    "implementation": "구현",
+    "verification": "검증",
+    "publication-approval": "게시 승인",
+}
+
+CHECKLIST_STATUSES = {
+    "pending": "대기",
+    "in_progress": "진행 중",
+    "done": "완료",
+    "failed": "실패",
+    "blocked": "차단됨",
+    "skipped": "생략",
+}
+
+STATUS_MARKS = {
+    "pending": " ",
+    "in_progress": "~",
+    "done": "x",
+    "failed": "!",
+    "blocked": "-",
+    "skipped": "/",
+}
+
 
 def run_root() -> Path:
     home = os.environ.get("ISSUE_TUNER_HOME") or Path.home() / ".issue-tuner"
@@ -106,7 +142,7 @@ def _metrics(state):
         "elapsed_seconds": state["elapsed_seconds"],
         "active_seconds": state["active_seconds"],
         "stages": {
-            name: {key: value for key, value in stage.items() if key in {"attempts", "outcome"}}
+            name: {key: value for key, value in stage.items() if key in {"attempts", "outcome", "status"}}
             for name, stage in state["stages"].items()
         },
     }
@@ -173,6 +209,44 @@ def set_outcome(run_id: str, stage: str, outcome: str, home=None) -> dict:
     state = _load(run_id, home)
     _stage(state, stage)["outcome"] = outcome
     return _save(state, run_id, home)
+
+
+def set_stage_status(run_id: str, stage: str, status: str, home=None) -> dict:
+    if not isinstance(status, str) or status not in CHECKLIST_STATUSES:
+        raise ValueError("status must be a known checklist status")
+    state = _load(run_id, home)
+    _stage(state, stage)["status"] = status
+    return _save(state, run_id, home)
+
+
+def checklist(run_id: str, home=None) -> list:
+    stages = _load(run_id, home)["stages"]
+    # 기본 단계를 먼저 두고, state에만 있는 단계는 사전순으로 덧붙인다.
+    names = list(CHECKLIST_STAGES)
+    names.extend(sorted(name for name in stages if name not in CHECKLIST_STAGES))
+    items = []
+    for name in names:
+        stage = stages.get(name)
+        status = (stage or {}).get("status", "pending")
+        if status not in CHECKLIST_STATUSES:
+            raise ValueError("status must be a known checklist status")
+        items.append(
+            {
+                "stage": name,
+                "label": STAGE_LABELS.get(name, name),
+                "status": status,
+                "status_label": CHECKLIST_STATUSES[status],
+            }
+        )
+    return items
+
+
+def render_checklist(run_id: str, home=None) -> str:
+    lines = ["## 진행 체크리스트"]
+    for item in checklist(run_id, home):
+        mark = STATUS_MARKS[item["status"]]
+        lines.append(f"- [{mark}] {item['label']} — {item['status_label']}")
+    return "\n".join(lines)
 
 
 def finish(run_id: str, now: int, home=None) -> dict:
