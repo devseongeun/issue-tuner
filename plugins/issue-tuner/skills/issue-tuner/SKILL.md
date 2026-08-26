@@ -7,7 +7,7 @@ description: Use when Jira 키·URL 또는 Issue Report로 재현 가능한 버�
 
 `Reproducer`/`Diagnoser`/`Implementer`/`Verifier`가 재현→진단→구현→검증한다. `Orchestrator`는 state, gate, 사용자 확인·승인을 관리하지만 role 판단을 대체하지 않는다. `references/*.md`를 따른다.
 
-run_state.py, git_context.py, runtime.py, publish.py만 library-only다. `commit_gate.py`는 CLI다; `run_state.create/pause/resume/resolve/finish`, `git_context.detect/create_worktree`, `runtime.start_runtime/stop_owned_process`, `commit_gate.record/check`, `publish.host_kind/draft_command`를 쓰고 모든 return과 error를 확인한다.
+run_state.py, git_context.py, runtime.py, publish.py만 library-only다. `commit_gate.py`는 CLI다; `run_state.create/pause/resume/resolve/finish`, `git_context.detect/create_worktree`, `runtime.start_runtime/stop_owned_process`, `commit_gate.record/check`, `publish.host_kind/draft_command/review_budget/split_plan/render_budget`을 쓰고 모든 return과 error를 확인한다.
 
 ## Workflow
 
@@ -21,13 +21,25 @@ run_state.py, git_context.py, runtime.py, publish.py만 library-only다. `commit
 8. fresh Diagnoser는 policy 모호성을 사용자에게 묻고 Serena 실패 시 Codex search+`rg`와 낮은 evidence level을 기록한다. `python3 <plugin-root>/scripts/validate_contract.py diagnosis <run>/diagnosis.json`을 실행한다.
 9. fresh Implementer는 confirmed worktree에서 test first다. 결정적 assertion RED 1회, 비결정적 동일 조건 RED 3회; 환경/설정 실패는 RED가 아니다. callers 전체의 최소 root-cause fix만 하며 무관 refactor/dependency는 금지한다. `python3 <plugin-root>/scripts/validate_contract.py implementation <run>/repositories/<repo-name>/implementation.json`을 실행한다.
 10. fresh Verifier는 구현 context 없이 확인된 채널·declared commands만 실행한다. 미해소 channel failure/evidence 부족은 `fail`; Computer Use 자동화 수단 실패는 사용자 직접 검증으로 대체 가능하며 `source: user_confirmed`, `failed_automated_runs`·`residual_risks`를 보존한다. `python3 <plugin-root>/scripts/validate_contract.py verification <run>/repositories/<repo-name>/verification.json`을 실행한다. 최초 `pass` 직후 `run_state.resolve`에 검증 시각과 verification의 `source`를 넘겨 해결 근거를 한 번만 기록한다.
-11. repo별 `pass`, nonempty channels, 빈 blockers 뒤에만 `commit_gate.record`로 commit gate를 만들고 게시 직전 `commit_gate.check`한다. dependency order대로 각 repo를 독립적으로 gate와 publish한다.
-12. 한 번의 최종 게시 승인 prompt에 repo별 exact stage files/excluded changes, commit message, 현재 브랜치 push, Draft PR/Draft MR, dependency order, 기존 CI 시작 가능성을 적는다. 이전 긍정은 무효다.
-13. 직후 명확한 긍정(`승인`,`응`,`좋아`,`진행해`)만 exact stage→gate check→commit→push→Draft를 연속 승인한다. `publish.draft_command`에서 반환된 command만 `subprocess.run(command, cwd=<confirmed repo worktree>, shell=False, check=True, capture_output=True, text=True)`로 실행하고 expected remote, branch, repo와 일치하는 Draft URL인지 검증한다. URL은 최종 보고/run evidence에 남긴다. command가 없으면 manual command/body를 제시하고 생성 성공으로 보고하지 않는다. 조건부 답변은 다시 묻는다. force push 금지, merge 금지, deploy 금지, pipeline 수동 실행 금지, reviewer 변경 금지.
+11. repo별 `pass`, nonempty channels, 빈 blockers 뒤에만 `commit_gate.record`로 commit gate를 만들고 게시 직전 `commit_gate.check`한다. dependency order대로 각 repo를 독립적으로 gate와 publish한다. gate 직후 repo마다 `publish.review_budget`으로 Review Budget을 측정하고 통과한 repo만 승인 요청으로 넘긴다.
+12. 한 번의 최종 게시 승인 prompt에 repo별 exact stage files/excluded changes, commit message, 현재 브랜치 push, Draft PR/Draft MR, dependency order, 기존 CI 시작 가능성과 `publish.render_budget(budget, plan)` 블록을 적는다. 이전 긍정은 무효다.
+13. 직후 명확한 긍정(`승인`,`응`,`좋아`,`진행해`)만 exact stage→gate check→commit→push→Draft를 연속 승인한다. `publish.draft_command`에서 반환된 command만 `subprocess.run(command, cwd=<confirmed repo worktree>, shell=False, check=True, capture_output=True, text=True)`로 실행하고 expected remote, branch, repo와 일치하는 Draft URL인지 검증한다. URL은 최종 보고/run evidence에 남긴다. command가 없으면 manual command/body를 제시하고 생성 성공으로 보고하지 않는다. `publish.draft_command`에는 budget을 필수 인자로 넘기고 제한 초과 예외면 Draft 생성과 push를 하지 않는다. 조건부 답변은 다시 묻는다. force push 금지, merge 금지, deploy 금지, pipeline 수동 실행 금지, reviewer 변경 금지.
 14. `runtime.stop_owned_process`로 owned runtime만 멈추고 `run_state.finish`로 metrics를 마감한다. `work_seconds`와 `wait_seconds`는 해결 시각까지, `cleanup_seconds`는 해결부터 종료까지의 시간이며 세 값의 합은 `elapsed_seconds`다. run evidence를 보존하고 외부 run path를 보고한다.
 
 - external raw evidence인 Issue Report/stage JSON에는 `check_public_safety.py`를 실행하지 않는다.
 - `<run>/repositories/<repo-name>/public-artifacts`에는 public Issue Tuner repo로 넘길 raw artifact가 아닌 sanitized summary인 sanitized Draft PR/MR body만 두고 `python3 <plugin-root>/scripts/check_public_safety.py <run>/repositories/<repo-name>/public-artifacts`로 검사한다. raw run dir 검사는 금지한다.
+
+## Review Budget
+
+- 게시 승인 요청 직전 `publish.review_budget(repo, base, head)`로 확인된 base와 현재 branch 사이 추가·삭제 줄 합계를 계산한다. 측정 없이 승인 요청하지 않는다.
+- 한계는 600줄이다. 600줄은 허용하고 601줄 이상은 Draft 생성과 push를 차단한다.
+- 코드·테스트·문서·설정·lockfile 등 모든 텍스트 변경을 합산하고 어떤 경로도 임의로 제외하지 않는다.
+- 여러 저장소를 다루면 저장소별로 독립 측정·판정한다. 합산하거나 한 repo의 판정을 다른 repo에 옮기지 않는다.
+- 초과 시 `publish.split_plan(budget)`으로 기능 단위의 독립 검증 가능한 분할안을 만들어 순서와 조각별 검증 방법과 함께 사용자에게 제시한다.
+- 최종 승인 요청에는 변경 줄 수, 변경 파일, 검증 결과, 위험 요소, 예상 리뷰 범위를 표시한다.
+- 600줄 이하여도 한 명이 30분 안에 검토하기 어려우면 더 작게 분할한다.
+- 바이너리 등 줄 수로 측정 불가한 변경은 `unmeasurable`로 따로 표시하고 30분 검토 가능 여부를 사용자에게 확인한다.
+- 제한을 우회하는 자동 예외나 강제 게시 옵션은 제공하지 않는다. 초과는 분할 후 재측정으로만 푼다.
 
 ## Stage Checklist
 
