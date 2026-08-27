@@ -8,6 +8,7 @@ import tempfile
 
 
 SAFE_RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
+SAFE_REPO_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 
 # 민감정보 마스킹 규칙. check_public_safety.py와 같은 개념이되 독립으로 정의한다.
 REDACTED = "[redacted]"
@@ -23,6 +24,8 @@ HOME_PATH = re.compile("/" + r"Users/[A-Za-z0-9._-]+")
 REPRODUCTION_STATUSES = {"reproduced": "재현됨", "failed": "재현 실패", "blocked": "차단됨"}
 SOURCES = {"automated": "자동 재현", "user_confirmed": "사용자 직접 확인"}
 DIAGNOSIS_STATUSES = {"diagnosed": "진단됨", "blocked": "차단됨"}
+IMPLEMENTATION_STATUSES = {"implemented": "구현됨", "blocked": "차단됨"}
+VERDICTS = {"pass": "통과", "fail": "실패"}
 
 UNRECORDED = "미기록"
 NONE_TEXT = "없음"
@@ -123,6 +126,34 @@ def _missing(name):
     return [f"- {UNRECORDED} — {name} 파일이 없다"]
 
 
+def _repositories(run_dir):
+    directory = run_dir / "repositories"
+    if directory.is_symlink() or not directory.is_dir():
+        return []
+    names = []
+    for entry in directory.iterdir():
+        if entry.is_symlink() or not entry.is_dir():
+            continue
+        if SAFE_REPO_NAME.fullmatch(entry.name):
+            names.append(entry.name)
+    return sorted(names)
+
+
+def _blocked(document):
+    if not isinstance(document, dict):
+        return False
+    return document.get("status") == "blocked" or _count(document.get("blockers")) > 0
+
+
+def _final_status(documents, verifications):
+    if any(_blocked(document) for document in documents):
+        return "차단됨"
+    verdicts = [document.get("verdict") for document in verifications.values() if document is not None]
+    if not verdicts or any(verdict != "pass" for verdict in verdicts):
+        return "미해결"
+    return "해결됨"
+
+
 def _symptom_lines(issue_report):
     if issue_report is None:
         return _missing("issue-report.json")
@@ -169,6 +200,98 @@ def _diagnosis_lines(diagnosis):
     return lines
 
 
+def _blocks(blocks):
+    lines = []
+    for block in blocks:
+        if lines:
+            lines.append("")
+        lines.extend(block)
+    return lines
+
+
+def _implementation_lines(names, implementations):
+    blocks = []
+    changed = any(
+        _count((implementations.get(name) or {}).get("changed_files")) > 0 for name in names
+    )
+    if not changed:
+        blocks.append(["- 코드 변경 없음 — 이 run은 저장소 파일을 수정하지 않았다"])
+    for name in names:
+        block = [f"### {name}", ""]
+        implementation = implementations.get(name)
+        if implementation is None:
+            block.extend(_missing("implementation.json"))
+        else:
+            block.append(f"- 상태: {_label(implementation.get('status'), IMPLEMENTATION_STATUSES)}")
+            block.append("- 변경 파일:")
+            block.extend(_bullets(implementation.get("changed_files")))
+            block.append(f"- RED 실행: {_count(implementation.get('red_runs'))}건")
+        blocks.append(block)
+    return _blocks(blocks)
+
+
+def _boundary_line(verification):
+    source = verification.get("source")
+    if source == "automated":
+        return f"- 근거 경계: 자동 검증 (자동 실행 {_count(verification.get('automated_runs'))}건)"
+    if source == "user_confirmed":
+        return (
+            "- 근거 경계: 사용자 직접 확인 — 자동 검증 아님 "
+            f"(실패한 자동 실행 {_count(verification.get('failed_automated_runs'))}건, "
+            f"잔여 위험 {_count(verification.get('residual_risks'))}건)"
+        )
+    return f"- 근거 경계: {UNRECORDED}"
+
+
+def _verification_lines(names, verifications):
+    if not names:
+        return _missing("verification.json")
+    blocks = []
+    for name in names:
+        block = [f"### {name}", ""]
+        verification = verifications.get(name)
+        if verification is None:
+            block.extend(_missing("verification.json"))
+        else:
+            block.append(f"- 판정: {_label(verification.get('verdict'), VERDICTS)}")
+            block.append(_boundary_line(verification))
+            block.append("- 채널:")
+            block.extend(_bullets(verification.get("channels")))
+            block.append(f"- 자동 실행 {_count(verification.get('automated_runs'))}건:")
+            block.extend(_bullets(verification.get("automated_runs")))
+        blocks.append(block)
+    return _blocks(blocks)
+
+
+def _labelled(prefix, items):
+    values = items if isinstance(items, (list, tuple)) else []
+    return [f"{prefix}: {value}" for value in values]
+
+
+def _risk_lines(names, reproduction, diagnosis, implementations, verifications):
+    failed = []
+    risks = []
+    blockers = _labelled("재현", (reproduction or {}).get("blockers"))
+    blockers.extend(_labelled("진단", (diagnosis or {}).get("blockers")))
+    for name in names:
+        implementation = implementations.get(name)
+        if implementation is not None:
+            blockers.extend(_labelled(f"구현/{name}", implementation.get("blockers")))
+        verification = verifications.get(name)
+        if verification is None:
+            continue
+        failed.extend(_labelled(name, verification.get("failed_automated_runs")))
+        risks.extend(_labelled(name, verification.get("residual_risks")))
+        blockers.extend(_labelled(f"검증/{name}", verification.get("blockers")))
+    lines = ["- 실패한 자동 실행:"]
+    lines.extend(_bullets(failed))
+    lines.append("- 잔여 위험:")
+    lines.extend(_bullets(risks))
+    lines.append("- 차단 사유:")
+    lines.extend(_bullets(blockers))
+    return lines
+
+
 def _time_lines(state, metrics):
     values = dict(state)
     values.update(metrics)
@@ -191,11 +314,22 @@ def final_report(run_id: str, home=None) -> str:
     reproduction = _read_json(directory / "reproduction.json")
     diagnosis = _read_json(directory / "diagnosis.json")
 
+    names = _repositories(directory)
+    implementations = {}
+    verifications = {}
+    for name in names:
+        repository = directory / "repositories" / name
+        implementations[name] = _read_json(repository / "implementation.json")
+        verifications[name] = _read_json(repository / "verification.json")
+
     issue = (issue_report or {}).get("issue")
     issue = issue if isinstance(issue, dict) else {}
     environment = (issue_report or {}).get("environment")
     environment = environment if isinstance(environment, dict) else {}
     # environment.target과 repositories[].path는 주소·로컬 경로라 보고서에 넣지 않는다.
+    documents = [reproduction, diagnosis]
+    documents.extend(implementations.values())
+    documents.extend(verifications.values())
 
     lines = [
         "# 최종 해결 보고서",
@@ -203,6 +337,7 @@ def final_report(run_id: str, home=None) -> str:
         f"- run: {_redact(run_id)}",
         f"- 이슈: {_redact(issue['id']) if isinstance(issue.get('id'), str) and issue['id'] else '식별자 없음'}",
         f"- 환경: {_text(environment.get('name'))}",
+        f"- 최종 상태: {_final_status(documents, verifications)}",
         "",
         "## 증상",
         "",
@@ -212,6 +347,12 @@ def final_report(run_id: str, home=None) -> str:
     lines.extend(_reproduction_lines(reproduction))
     lines.extend(["", "## 근본 원인", ""])
     lines.extend(_diagnosis_lines(diagnosis))
+    lines.extend(["", "## 해결 조치", ""])
+    lines.extend(_implementation_lines(names, implementations))
+    lines.extend(["", "## 검증 결과", ""])
+    lines.extend(_verification_lines(names, verifications))
+    lines.extend(["", "## 실패와 잔여 위험", ""])
+    lines.extend(_risk_lines(names, reproduction, diagnosis, implementations, verifications))
     lines.extend(["", "## 시간", ""])
     lines.extend(_time_lines(state, metrics))
     return "\n".join(lines)

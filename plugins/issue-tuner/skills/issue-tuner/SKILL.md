@@ -54,6 +54,9 @@ run_state.py, git_context.py, runtime.py, publish.py, report.py만 library-only�
 
 - `report.final_report`로 본문을 만들고 `report.write_final_report`로 `<run>/final-report.md`에 쓴다. 본문을 손으로 짓지 않는다.
 - 근거는 단계별 산출물 파일뿐이다. issue-report, reproduction, diagnosis, implementation, verification, commit-gate에 없는 사실을 추가하지 않는다.
-- 증상과 근본 원인을 각각 구분해 적는다.
+- 증상, 근본 원인, 해결 조치, 검증 결과를 각각 구분해 적는다.
 - 시작 시각, 해결 시각, `elapsed_seconds`의 총 경과 시간, `work_seconds`의 실제 작업 시간을 함께 적는다.
+- `implementation`이 `skipped`거나 변경 파일이 없으면 코드 변경이 없었음을 명시한다.
+- `failed_automated_runs`의 무관한 실패 테스트와 `residual_risks`를 그대로 남긴다. 지우거나 뭉뚱그려 숨기지 않는다.
+- 항목마다 `source: user_confirmed`와 `source: automated`를 표시해 사용자 확인과 자동 검증의 근거 경계를 구분한다.
 - 민감정보는 담지 않는다. credential, token, 내부 URL, 개인정보는 제외하고 sanitized summary만 적는다.
