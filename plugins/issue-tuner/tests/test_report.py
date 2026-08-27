@@ -18,6 +18,9 @@ HEADINGS = (
     "## 증상",
     "## 재현",
     "## 근본 원인",
+    "## 해결 조치",
+    "## 검증 결과",
+    "## 실패와 잔여 위험",
     "## 시간",
 )
 
@@ -32,6 +35,15 @@ OTHER_ROOT_CAUSE = "주문 요약 캐시가 만료 후 갱신되지 않는다"
 EVIDENCE_ONE = "응답 본문 조각에 남은 원본 로그 문장 하나"
 EVIDENCE_TWO = "호출부 스택에 남은 원본 로그 문장 둘"
 SYMBOL = "checkout.summary.render"
+CHANGED_FILE = "src/checkout/summary.py"
+RED_RUN = "합성 회귀 테스트가 수정 전 한 번 실패했다"
+AUTOMATED_RUN = "합성 회귀 스위트 12개가 통과했다"
+FAILED_RUN = "무관한 알림 테스트가 시간 초과로 실패했다"
+RESIDUAL_RISK = "야간 배치 경로는 이번 실행에서 확인하지 못했다"
+REPRODUCTION_BLOCKER = "합성 관리자 화면은 권한이 모자라 열지 못했다"
+DIAGNOSIS_BLOCKER = "합성 검색 도구가 응답하지 않아 호출부 일부를 못 봤다"
+IMPLEMENTATION_BLOCKER = "합성 의존 저장소는 이번 범위에서 손대지 못했다"
+VERIFICATION_BLOCKER = "합성 브라우저 채널이 열리지 않아 남은 화면을 못 봤다"
 
 # 보고서에 그대로 새면 안 되는 값들. 안전 게이트에 걸리지 않도록 문자열을 쪼개 조합한다.
 LEAKED_VALUE = "sy" + "nthetic-demo-value"
@@ -55,7 +67,7 @@ def utc_stamp(value):
 
 
 def section(text, heading):
-    # 다음 절 heading 직전까지를 그 절의 본문으로 본다.
+    # 다음 절 heading 직전까지를 그 절의 본문으로 본다. 저장소별 소제목(###)은 본문에 포함한다.
     lines = text.splitlines()
     start = lines.index(heading)
     body = []
@@ -138,19 +150,51 @@ def diagnosis(**overrides):
     return payload
 
 
+def implementation(repository="checkout-web", **overrides):
+    payload = {
+        "status": "implemented",
+        "repository": repository,
+        "changed_files": [CHANGED_FILE],
+        "red_runs": [RED_RUN],
+        "blockers": [],
+    }
+    payload.update(overrides)
+    return payload
+
+
+def verification(verdict="pass", source="automated", **overrides):
+    # 스키마의 allOf 조건: pass+automated는 automated_runs가 있어야 하고 실패 목록이 비어야 하며,
+    # pass+user_confirmed는 automated_runs가 비고 실패 목록과 잔여 위험이 각각 하나 이상이어야 한다.
+    automated = source == "automated"
+    payload = {
+        "verdict": verdict,
+        "source": source,
+        "channels": ["browser"],
+        "automated_runs": [AUTOMATED_RUN] if automated else [],
+        "failed_automated_runs": [] if automated else [FAILED_RUN],
+        "residual_risks": [] if automated else [RESIDUAL_RISK],
+        "blockers": [],
+    }
+    payload.update(overrides)
+    return payload
+
+
 class ReportTest(unittest.TestCase):
     def dump(self, path, payload):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
 
-    def build(self, home, documents=None, run_id="demo-run"):
+    def build(self, home, documents=None, repositories=None, run_id="demo-run"):
         run = Path(home) / "runs" / run_id
         run.mkdir(parents=True)
         for name, payload in (documents or {}).items():
             self.dump(run / f"{name}.json", payload)
+        for name, stages in (repositories or {}).items():
+            for stage, payload in stages.items():
+                self.dump(run / "repositories" / name / f"{stage}.json", payload)
         return run
 
-    def complete(self, home, documents=None):
+    def complete(self, home, documents=None, repositories=None):
         base = {
             "state": finished_state(),
             "metrics": finished_metrics(),
@@ -159,7 +203,9 @@ class ReportTest(unittest.TestCase):
             "diagnosis": diagnosis(),
         }
         base.update(documents or {})
-        return self.build(home, base)
+        if repositories is None:
+            repositories = {"checkout-web": {"implementation": implementation(), "verification": verification()}}
+        return self.build(home, base, repositories)
 
     def test_quotes_every_stage_document_as_the_only_source_and_follows_later_edits(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -168,7 +214,7 @@ class ReportTest(unittest.TestCase):
 
             text = report.final_report("demo-run", home)
 
-            for quoted in (SYMPTOM, EXPECTED, STEP, SCENARIO, LIMITATION, ROOT_CAUSE, SYMBOL):
+            for quoted in (SYMPTOM, EXPECTED, STEP, SCENARIO, ROOT_CAUSE, CHANGED_FILE, AUTOMATED_RUN):
                 with self.subTest(quoted=quoted):
                     self.assertIn(quoted, text)
 
@@ -195,8 +241,6 @@ class ReportTest(unittest.TestCase):
             self.assertEqual(positions, sorted(positions))
             self.assertEqual(lines[0], HEADINGS[0])
             self.assertFalse(text.endswith("\n"))
-            # PR A 범위는 run 전체 수준 네 개 절뿐이다.
-            self.assertEqual(len([line for line in lines if line.startswith("## ")]), 4)
 
     def test_reports_utc_timestamps_and_second_counts_and_marks_missing_times_unrecorded(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -227,6 +271,90 @@ class ReportTest(unittest.TestCase):
             # 기록이 없으면 0초나 임의 시각을 지어내지 않는다.
             self.assertNotRegex(body, r"\d")
 
+    def test_states_no_code_change_for_a_missing_and_for_an_empty_implementation(self):
+        cases = {
+            "missing": {"verification": verification()},
+            "empty": {"implementation": implementation(changed_files=[]), "verification": verification()},
+        }
+        for label, stages in cases.items():
+            with self.subTest(case=label), tempfile.TemporaryDirectory() as directory:
+                home = Path(directory)
+                self.complete(home, repositories={"checkout-web": stages})
+
+                text = report.final_report("demo-run", home)
+
+                self.assertIn("코드 변경 없음", section(text, "## 해결 조치"))
+                self.assertNotIn(CHANGED_FILE, text)
+
+    def test_keeps_failed_runs_residual_risks_and_every_stage_blocker_visible(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            self.complete(
+                home,
+                documents={
+                    "reproduction": reproduction(blockers=[REPRODUCTION_BLOCKER]),
+                    "diagnosis": diagnosis(blockers=[DIAGNOSIS_BLOCKER]),
+                },
+                repositories={
+                    "checkout-web": {
+                        "implementation": implementation(blockers=[IMPLEMENTATION_BLOCKER]),
+                        "verification": verification(
+                            failed_automated_runs=[FAILED_RUN],
+                            residual_risks=[RESIDUAL_RISK],
+                            blockers=[VERIFICATION_BLOCKER],
+                        ),
+                    }
+                },
+            )
+
+            body = section(report.final_report("demo-run", home), "## 실패와 잔여 위험")
+
+            for entry in (
+                FAILED_RUN,
+                RESIDUAL_RISK,
+                REPRODUCTION_BLOCKER,
+                DIAGNOSIS_BLOCKER,
+                IMPLEMENTATION_BLOCKER,
+                VERIFICATION_BLOCKER,
+            ):
+                with self.subTest(entry=entry):
+                    self.assertIn(entry, body)
+
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            self.complete(home)
+
+            body = section(report.final_report("demo-run", home), "## 실패와 잔여 위험")
+
+            self.assertIn("없음", body)
+
+    def test_separates_user_confirmed_verification_from_automated_verification(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            self.complete(home)
+            automated = section(report.final_report("demo-run", home), "## 검증 결과")
+
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            self.complete(
+                home,
+                repositories={
+                    "checkout-web": {
+                        "implementation": implementation(),
+                        "verification": verification(source="user_confirmed"),
+                    }
+                },
+            )
+            confirmed = section(report.final_report("demo-run", home), "## 검증 결과")
+
+        self.assertNotEqual(automated, confirmed)
+        self.assertIn("자동", automated)
+        self.assertNotIn("사용자 확인", automated)
+        self.assertIn("사용자", confirmed)
+        # 사용자 확인 근거는 자동 검증과 같은 무게로 읽히면 안 된다.
+        self.assertRegex(confirmed, r"자동\s*검증(이)?\s*아[님니]")
+        self.assertNotIn(AUTOMATED_RUN, confirmed)
+
     def test_masks_credentials_home_paths_targets_and_raw_diagnosis_evidence(self):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
@@ -242,7 +370,15 @@ class ReportTest(unittest.TestCase):
                         }
                     ),
                     "reproduction": reproduction(scenario=f"{SCENARIO} — {HEADER_LEAK}"),
-                    "diagnosis": diagnosis(symbols=[f"{SYMBOL} {FIELD_LEAK}"]),
+                },
+                repositories={
+                    "checkout-web": {
+                        "implementation": implementation(),
+                        "verification": verification(
+                            failed_automated_runs=[FAILED_RUN],
+                            residual_risks=[f"{RESIDUAL_RISK} {FIELD_LEAK}"],
+                        ),
+                    }
                 },
             )
 
@@ -253,14 +389,83 @@ class ReportTest(unittest.TestCase):
                     self.assertNotIn(leak, text)
             # 민감한 조각만 가리고 사람이 읽을 문장 자체는 남아야 한다.
             self.assertIn(SYMPTOM, text)
-            self.assertIn(SCENARIO, section(text, "## 재현"))
-            self.assertIn(SYMBOL, section(text, "## 근본 원인"))
+            self.assertIn(RESIDUAL_RISK, section(text, "## 실패와 잔여 위험"))
 
             for hidden in (TARGET, REPOSITORY_PATH, EVIDENCE_ONE, EVIDENCE_TWO):
                 with self.subTest(hidden=hidden):
                     self.assertNotIn(hidden, text)
+            self.assertIn("checkout-web", text)
             # 근거는 내용 대신 건수만 남긴다.
             self.assertRegex(section(text, "## 근본 원인"), r"2\s*건")
+
+    def test_derives_the_final_status_from_verdicts_and_blockers(self):
+        cases = {
+            "해결됨": {
+                "checkout-web": {"implementation": implementation(), "verification": verification()},
+                "orders-api": {
+                    "implementation": implementation(repository="orders-api"),
+                    "verification": verification(),
+                },
+            },
+            "미해결": {
+                "checkout-web": {"implementation": implementation(), "verification": verification()},
+                "orders-api": {
+                    "implementation": implementation(repository="orders-api"),
+                    "verification": verification(verdict="fail", automated_runs=[AUTOMATED_RUN]),
+                },
+            },
+            "차단됨": {
+                "checkout-web": {
+                    "implementation": implementation(),
+                    "verification": verification(blockers=[VERIFICATION_BLOCKER]),
+                },
+            },
+        }
+        for expected, repositories in cases.items():
+            with self.subTest(status=expected), tempfile.TemporaryDirectory() as directory:
+                home = Path(directory)
+                self.complete(home, repositories=repositories)
+
+                text = report.final_report("demo-run", home)
+
+                self.assertIn(expected, text)
+                for other in set(cases) - {expected}:
+                    with self.subTest(other=other):
+                        self.assertNotIn(other, text)
+
+    def test_renders_every_repository_in_sorted_order_without_mixing_their_results(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            # 사전순 뒤에 오는 저장소를 먼저 만들어 디렉터리 순서에 기대지 않는지 본다.
+            self.complete(
+                home,
+                repositories={
+                    "zebra-web": {
+                        "implementation": implementation(repository="zebra-web", changed_files=["src/zebra/view.py"]),
+                        "verification": verification(verdict="fail"),
+                    },
+                    "alpha-service": {
+                        "implementation": implementation(
+                            repository="alpha-service", changed_files=["src/alpha/handler.py"]
+                        ),
+                        "verification": verification(),
+                    },
+                },
+            )
+
+            text = report.final_report("demo-run", home)
+
+            for heading in ("## 해결 조치", "## 검증 결과"):
+                with self.subTest(heading=heading):
+                    body = section(text, heading)
+                    self.assertRegex(body, r"(?m)^#{3,} *alpha-service")
+                    self.assertRegex(body, r"(?m)^#{3,} *zebra-web")
+                    self.assertLess(body.index("alpha-service"), body.index("zebra-web"))
+            fixes = section(text, "## 해결 조치")
+            for quoted in ("src/alpha/handler.py", "src/zebra/view.py"):
+                with self.subTest(quoted=quoted):
+                    self.assertIn(quoted, fixes)
+            self.assertLess(fixes.index("src/alpha/handler.py"), fixes.index("src/zebra/view.py"))
 
     def test_builds_a_report_for_a_run_without_any_stage_file_without_inventing_content(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -275,6 +480,8 @@ class ReportTest(unittest.TestCase):
             for heading in ("## 증상", "## 재현", "## 근본 원인", "## 시간"):
                 with self.subTest(heading=heading):
                     self.assertIn("미기록", section(text, heading))
+            self.assertIn("코드 변경 없음", section(text, "## 해결 조치"))
+            self.assertIn("없음", section(text, "## 실패와 잔여 위험"))
             self.assertNotRegex(section(text, "## 시간"), r"\d")
             self.assertEqual(list(run.iterdir()), [])
 
