@@ -135,12 +135,14 @@ class SkillContractTest(unittest.TestCase):
             "commit_gate.check",
             "publish.host_kind",
             "publish.draft_command",
+            "report.final_report",
+            "report.write_final_report",
         )
         for call in calls:
             with self.subTest(call=call):
                 self.assertIn(call, self.skill)
         self.assertIn(
-            "run_state.py, git_context.py, runtime.py, publish.py만 library-only",
+            "run_state.py, git_context.py, runtime.py, publish.py, report.py만 library-only",
             self.skill,
         )
         self.assertNotIn("commit_gate.py, publish.py`는 Python module/function이며 standalone CLI가 아니다", self.skill)

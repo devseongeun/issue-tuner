@@ -7,7 +7,7 @@ description: Use when Jira 키·URL 또는 Issue Report로 재현 가능한 버�
 
 `Reproducer`/`Diagnoser`/`Implementer`/`Verifier`가 재현→진단→구현→검증한다. `Orchestrator`는 state, gate, 사용자 확인·승인을 관리하지만 role 판단을 대체하지 않는다. `references/*.md`를 따른다.
 
-run_state.py, git_context.py, runtime.py, publish.py만 library-only다. `commit_gate.py`는 CLI다; `run_state.create/pause/resume/resolve/finish`, `git_context.detect/create_worktree`, `runtime.start_runtime/stop_owned_process`, `commit_gate.record/check`, `publish.host_kind/draft_command/review_budget/split_plan/render_budget`을 쓰고 모든 return과 error를 확인한다.
+run_state.py, git_context.py, runtime.py, publish.py, report.py만 library-only다. `commit_gate.py`는 CLI다; `run_state.create/pause/resume/resolve/finish`, `git_context.detect/create_worktree`, `runtime.start_runtime/stop_owned_process`, `commit_gate.record/check`, `publish.host_kind/draft_command/review_budget/split_plan/render_budget`, `report.final_report/write_final_report`를 쓰고 모든 return과 error를 확인한다.
 
 ## Workflow
 
@@ -24,7 +24,7 @@ run_state.py, git_context.py, runtime.py, publish.py만 library-only다. `commit
 11. repo별 `pass`, nonempty channels, 빈 blockers 뒤에만 `commit_gate.record`로 commit gate를 만들고 게시 직전 `commit_gate.check`한다. dependency order대로 각 repo를 독립적으로 gate와 publish한다. gate 직후 repo마다 `publish.review_budget`으로 Review Budget을 측정하고 통과한 repo만 승인 요청으로 넘긴다.
 12. 한 번의 최종 게시 승인 prompt에 repo별 exact stage files/excluded changes, commit message, 현재 브랜치 push, Draft PR/Draft MR, dependency order, 기존 CI 시작 가능성과 `publish.render_budget(budget, plan)` 블록을 적는다. 이전 긍정은 무효다.
 13. 직후 명확한 긍정(`승인`,`응`,`좋아`,`진행해`)만 exact stage→gate check→commit→push→Draft를 연속 승인한다. `publish.draft_command`에서 반환된 command만 `subprocess.run(command, cwd=<confirmed repo worktree>, shell=False, check=True, capture_output=True, text=True)`로 실행하고 expected remote, branch, repo와 일치하는 Draft URL인지 검증한다. URL은 최종 보고/run evidence에 남긴다. command가 없으면 manual command/body를 제시하고 생성 성공으로 보고하지 않는다. `publish.draft_command`에는 budget을 필수 인자로 넘기고 제한 초과 예외면 Draft 생성과 push를 하지 않는다. 조건부 답변은 다시 묻는다. force push 금지, merge 금지, deploy 금지, pipeline 수동 실행 금지, reviewer 변경 금지.
-14. `runtime.stop_owned_process`로 owned runtime만 멈추고 `run_state.finish`로 metrics를 마감한다. `work_seconds`와 `wait_seconds`는 해결 시각까지, `cleanup_seconds`는 해결부터 종료까지의 시간이며 세 값의 합은 `elapsed_seconds`다. run evidence를 보존하고 외부 run path를 보고한다.
+14. `runtime.stop_owned_process`로 owned runtime만 멈추고 `run_state.finish`로 metrics를 마감한다. `work_seconds`와 `wait_seconds`는 해결 시각까지, `cleanup_seconds`는 해결부터 종료까지의 시간이며 세 값의 합은 `elapsed_seconds`다. run evidence를 보존하고 외부 run path를 보고한다. 이어 `report.write_final_report`로 `<run>/final-report.md`를 쓰고 그 경로를 보고한다.
 
 - external raw evidence인 Issue Report/stage JSON에는 `check_public_safety.py`를 실행하지 않는다.
 - `<run>/repositories/<repo-name>/public-artifacts`에는 public Issue Tuner repo로 넘길 raw artifact가 아닌 sanitized summary인 sanitized Draft PR/MR body만 두고 `python3 <plugin-root>/scripts/check_public_safety.py <run>/repositories/<repo-name>/public-artifacts`로 검사한다. raw run dir 검사는 금지한다.
@@ -49,3 +49,11 @@ run_state.py, git_context.py, runtime.py, publish.py만 library-only다. `commit
 - 진단 결과 코드 변경이 필요 없으면 `implementation`을 `skipped`로 표시하고 다음 stage로 넘어간다.
 - 세션이 바뀌면 첫 응답에서 `run_state.render_checklist`로 저장된 체크리스트를 복원해 표시한 뒤 이어간다.
 - `render_checklist`는 읽기 전용이다. 체크리스트 기록·표시는 기존 run 산출물 쓰기 정책을 따르며 추가 사용자 승인을 요구하지 않는다.
+
+## Final Report
+
+- `report.final_report`로 본문을 만들고 `report.write_final_report`로 `<run>/final-report.md`에 쓴다. 본문을 손으로 짓지 않는다.
+- 근거는 단계별 산출물 파일뿐이다. issue-report, reproduction, diagnosis, implementation, verification, commit-gate에 없는 사실을 추가하지 않는다.
+- 증상과 근본 원인을 각각 구분해 적는다.
+- 시작 시각, 해결 시각, `elapsed_seconds`의 총 경과 시간, `work_seconds`의 실제 작업 시간을 함께 적는다.
+- 민감정보는 담지 않는다. credential, token, 내부 URL, 개인정보는 제외하고 sanitized summary만 적는다.
