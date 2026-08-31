@@ -398,6 +398,29 @@ class ReportTest(unittest.TestCase):
             # 근거는 내용 대신 건수만 남긴다.
             self.assertRegex(section(text, "## 근본 원인"), r"2\s*건")
 
+    def test_preserves_legitimate_api_key_and_bearer_test_descriptions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            self.complete(
+                home,
+                repositories={
+                    "checkout-web": {
+                        "implementation": implementation(),
+                        "verification": verification(
+                            automated_runs=[
+                                "tests.test_api_key: PASS",
+                                "Bearer token parsing: PASS",
+                            ]
+                        ),
+                    }
+                },
+            )
+
+            text = report.final_report("demo-run", home)
+
+            self.assertIn("tests.test_api_key: PASS", text)
+            self.assertIn("Bearer token parsing: PASS", text)
+
     def test_derives_the_final_status_from_verdicts_and_blockers(self):
         cases = {
             "해결됨": {

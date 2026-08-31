@@ -286,6 +286,110 @@ class SkillContractTest(unittest.TestCase):
         self.assertIn("failed_automated_runs", verifier)
         self.assertIn("residual_risks", verifier)
 
+    def test_handoff_report_is_refreshed_at_every_persisted_lifecycle_boundary(self):
+        workflow_steps = [
+            (int(match.group(1)), match.group(2))
+            for match in re.finditer(r"(?m)^(\d+)\. (.+)$", self.skill)
+        ]
+        boundaries = ("run_state.create", "run_state.resolve", "run_state.finish")
+        boundary_steps = []
+        instructions = {}
+        for lifecycle_call in boundaries:
+            matches = [
+                (step, instruction)
+                for step, instruction in workflow_steps
+                if lifecycle_call in instruction
+            ]
+            with self.subTest(lifecycle_call=lifecycle_call):
+                self.assertEqual(len(matches), 1)
+                step, instruction = matches[0]
+                boundary_steps.append(step)
+                instructions[lifecycle_call] = instruction
+                lifecycle = instruction.index(lifecycle_call)
+                refresh = instruction.index("report.write_handoff_report")
+                self.assertLess(lifecycle, refresh)
+                self.assertIn("직후", instruction[lifecycle:refresh])
+        self.assertEqual(boundary_steps, sorted(boundary_steps))
+
+        finish = instructions["run_state.finish"]
+        self.assertLess(
+            finish.index("report.write_handoff_report"),
+            finish.index("report.write_final_report"),
+        )
+
+        checklist = self.skill[
+            self.skill.index("## Stage Checklist"):self.skill.index("## Handoff Report")
+        ]
+        transition = next(
+            line
+            for line in checklist.splitlines()
+            if "run_state.set_stage_status" in line
+            and "report.write_handoff_report" in line
+        )
+        refresh = transition.index("report.write_handoff_report")
+        self.assertLess(transition.index("stage JSON"), refresh)
+        self.assertLess(transition.index("run_state.set_stage_status"), refresh)
+        self.assertIn("직후", transition[:refresh])
+
+    def test_resume_reads_handoff_first_then_uses_persisted_stage_artifacts_as_authority(self):
+        checklist = self.skill[
+            self.skill.index("## Stage Checklist"):self.skill.index("## Handoff Report")
+        ]
+        resume = next(
+            line
+            for line in checklist.splitlines()
+            if "<run>/handoff-report.md" in line
+            and "persisted stage artifacts" in line
+            and "conversation history" in line
+        )
+
+        handoff = resume.index("<run>/handoff-report.md")
+        artifacts = resume.index("persisted stage artifacts")
+        self.assertLess(handoff, artifacts)
+        self.assertIn("먼저 읽", resume)
+        self.assertIn("직접 확인해", resume[artifacts:])
+        self.assertIn("conversation history", resume)
+        self.assertIn("conversation history에 의존하거나 누락값을 보충하지 않는다", resume)
+
+    def test_stage_order_status_vocabulary_and_handoff_apis_are_explicit(self):
+        checklist = self.skill[
+            self.skill.index("## Stage Checklist"):self.skill.index("## Handoff Report")
+        ]
+        stage_order = (
+            "issue-report",
+            "reproduction",
+            "diagnosis",
+            "implementation",
+            "verification",
+            "publication-approval",
+        )
+        stage_line = next(
+            line
+            for line in checklist.splitlines()
+            if all(f"`{stage}`" in line for stage in stage_order)
+        )
+        positions = [stage_line.index(f"`{stage}`") for stage in stage_order]
+        self.assertEqual(positions, sorted(positions))
+
+        status_names = ("pending", "in_progress", "done", "failed", "blocked", "skipped")
+        status_line = next(
+            line
+            for line in checklist.splitlines()
+            if all(f"`{status}`" in line for status in status_names)
+        )
+        vocabulary = re.findall(
+            r"`(pending|in_progress|done|failed|blocked|skipped)`",
+            status_line,
+        )
+        self.assertEqual(
+            vocabulary,
+            ["pending", "in_progress", "done", "failed", "blocked", "skipped"],
+        )
+
+        for api in ("report.handoff_report", "report.write_handoff_report"):
+            with self.subTest(api=api):
+                self.assertIn(api, self.skill)
+
     def test_public_content_has_no_private_or_retired_terms(self):
         forbidden = (
             "TQ-",
