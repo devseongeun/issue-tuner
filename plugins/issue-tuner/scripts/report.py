@@ -2,8 +2,9 @@
 import datetime
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
+import stat
 import tempfile
 
 
@@ -358,15 +359,15 @@ def final_report(run_id: str, home=None) -> str:
     return "\n".join(lines)
 
 
-def write_final_report(run_id: str, home=None) -> Path:
-    report = final_report(run_id, home)
-    path = _run_dir(run_id, home) / "final-report.md"
+def _atomic_write(path, content, reject_symlink=False):
+    if reject_symlink and path.is_symlink():
+        raise ValueError("report path must not be a symlink")
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = None
     try:
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as file:
             temporary = Path(file.name)
-            file.write(report)
+            file.write(content)
         temporary.replace(path)
     finally:
         if temporary is not None:
@@ -375,3 +376,304 @@ def write_final_report(run_id: str, home=None) -> Path:
             except OSError:
                 pass
     return path
+
+
+def write_final_report(run_id: str, home=None) -> Path:
+    report = final_report(run_id, home)
+    return _atomic_write(_run_dir(run_id, home) / "final-report.md", report)
+
+
+RECORDED = "기록됨"
+DAMAGED = "손상됨"
+UNSAFE = "안전하지 않은 경로"
+
+HANDOFF_MAX_JSON_BYTES = 4 * 1024 * 1024
+HANDOFF_MAX_JSON_NESTING = 256
+HANDOFF_JSON_SCAN = re.compile(r'"(?:[^"\\]+|\\.)*"?|[][{}]')
+SAFE_ARTIFACT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*\Z")
+SECRET_NAME = (
+    r"(?:[a-z0-9]+[-_])*(?:api[-_]?key|access[-_]?key|private[-_]?key|secret[-_]?key|token|password|secret)"
+)
+HANDOFF_SECRET_VALUE = r"""(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s"',;&#}]+)"""
+# 인계 보고서는 fresh session이 그대로 읽는 문서라 final report보다 넓은 credential 표면을 가린다.
+HANDOFF_REDACTIONS = (
+    (HOME_PATH, REDACTED_PATH),
+    (re.compile(r"/home/[A-Za-z0-9._-]+"), REDACTED_PATH),
+    (re.compile(r"(?i)(\b[a-z][a-z0-9+.-]*://)[^/@\s]+@"), r"\1" + REDACTED + "@"),
+    (
+        re.compile(
+            r"(?i)([?&](?:access[-_]?token|api[-_]?key|access[-_]?key|private[-_]?key"
+            r"|token|password|secret)=)" + HANDOFF_SECRET_VALUE
+        ),
+        r"\1" + REDACTED,
+    ),
+    (
+        re.compile(
+            r"""(?ix)(?<![\w.])(["']?""" + SECRET_NAME + r"""["']?\s*=\s*)"""
+            + HANDOFF_SECRET_VALUE
+        ),
+        r"\1" + REDACTED,
+    ),
+    (
+        re.compile(
+            r"""(?ix)(?<![\w.])(["']?""" + SECRET_NAME + r"""["']?\s*:\s*)"""
+            + HANDOFF_SECRET_VALUE
+        ),
+        r"\1" + REDACTED,
+    ),
+    (
+        re.compile(
+            r"""(?ix)(?<![\w-])(["']?(?:set[-_]?cookie|cookie)["']?\s*:\s*)"""
+            + HANDOFF_SECRET_VALUE
+            + r"""(?:\s*;\s*[^\s"',;]+)*"""
+        ),
+        r"\1" + REDACTED,
+    ),
+    (
+        re.compile(
+            r"""(?ix)(?<![\w.])(["']?(?:x-api-key|api[-_]?key|access[-_]?key|private[-_]?key"""
+            r"""|x-auth-token|proxy-authorization|authorization)["']?\s*[:=]\s*)"""
+            r"""(?:(?:bearer|basic)\s+)?"""
+            + HANDOFF_SECRET_VALUE
+        ),
+        r"\1" + REDACTED,
+    ),
+    (re.compile(r"(?i)(\bbearer\s*[:=]\s*)" + HANDOFF_SECRET_VALUE), r"\1" + REDACTED),
+    (
+        re.compile(
+            r"""(?ix)((?:^|\s)--""" + SECRET_NAME + r"""(?:=|\s+))(?!-)"""
+            + HANDOFF_SECRET_VALUE
+        ),
+        r"\1" + REDACTED,
+    ),
+    (re.compile(r"(?i)((?:^|\s)--user(?:=|\s+))(?!-)[^\s,;:]+:[^\s,;:]+"), r"\1" + REDACTED),
+)
+
+
+def _handoff_value(value, empty=UNRECORDED):
+    # 신뢰할 수 없는 값이 heading·체크리스트 행을 위조하지 못하도록 한 줄로 접고 credential을 가린다.
+    if not isinstance(value, str) or not value:
+        return empty
+    text = re.sub(r"\s+", " ", value.replace("\t", " ")).strip()
+    for pattern, replacement in HANDOFF_REDACTIONS:
+        text = pattern.sub(replacement, text)
+    return text
+
+
+def _json_nesting_is_bounded(text):
+    # 문자열 리터럴 안의 괄호는 세지 않고, 재귀 파서에 넘기기 전에 깊이를 제한한다.
+    depth = 0
+    for token in HANDOFF_JSON_SCAN.findall(text):
+        if token in ("[", "{"):
+            depth += 1
+            if depth > HANDOFF_MAX_JSON_NESTING:
+                return False
+        elif token in ("]", "}"):
+            depth -= 1
+    return True
+
+
+def _handoff_stat(value):
+    return value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_mode
+
+
+def _read_handoff_json(path):
+    path = Path(path)
+    try:
+        linked = path.lstat()
+    except FileNotFoundError:
+        return None, UNRECORDED
+    except OSError:
+        return None, DAMAGED
+    if not stat.S_ISREG(linked.st_mode):
+        return None, UNSAFE
+
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except FileNotFoundError:
+        return None, UNSAFE
+    except OSError:
+        try:
+            current = path.lstat()
+        except FileNotFoundError:
+            return None, UNSAFE
+        except OSError:
+            return None, DAMAGED
+        return None, UNSAFE if _handoff_stat(current) != _handoff_stat(linked) else DAMAGED
+
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or _handoff_stat(linked) != _handoff_stat(before):
+            return None, UNSAFE
+        content = bytearray()
+        while len(content) <= HANDOFF_MAX_JSON_BYTES:
+            chunk = os.read(descriptor, HANDOFF_MAX_JSON_BYTES + 1 - len(content))
+            if not chunk:
+                break
+            content.extend(chunk)
+        after = os.fstat(descriptor)
+        current = path.lstat()
+    except FileNotFoundError:
+        return None, UNSAFE
+    except (OSError, MemoryError):
+        return None, DAMAGED
+    finally:
+        os.close(descriptor)
+
+    if not stat.S_ISREG(current.st_mode) or not (
+        _handoff_stat(before) == _handoff_stat(after) == _handoff_stat(current)
+    ):
+        return None, UNSAFE
+    if len(content) > HANDOFF_MAX_JSON_BYTES:
+        return None, DAMAGED
+    try:
+        text = content.decode("utf-8")
+        if not _json_nesting_is_bounded(text):
+            return None, DAMAGED
+        document = json.loads(text)
+    except (UnicodeError, ValueError, RecursionError, MemoryError):
+        return None, DAMAGED
+    if not isinstance(document, dict):
+        return None, DAMAGED
+    return document, RECORDED
+
+
+def _repository_json(run_dir, name, filename):
+    if (
+        not isinstance(name, str)
+        or not SAFE_REPO_NAME.fullmatch(name)
+        or not isinstance(filename, str)
+        or not SAFE_ARTIFACT_NAME.fullmatch(filename)
+    ):
+        return None, UNSAFE
+    root = Path(run_dir) / "repositories"
+    repository = root / name
+    if root.is_symlink() or repository.is_symlink():
+        return None, UNSAFE
+    if not root.is_dir() or not repository.is_dir():
+        return None, UNRECORDED
+    try:
+        repository.resolve().relative_to(root.resolve())
+    except (OSError, ValueError):
+        return None, UNSAFE
+    return _read_handoff_json(repository / filename)
+
+
+GATE_OPERATION_KINDS = {"add", "copy", "delete", "modify", "rename", "typechange", "unmerged"}
+GATE_FILE_MODES = {"file": {"100644", "100755"}, "symlink": {"120000"}}
+
+
+def _valid_sha256(value):
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
+def _valid_gate_fingerprint(fingerprint):
+    if not isinstance(fingerprint, dict):
+        return False
+    mtime = fingerprint.get("mtime_ns")
+    if fingerprint.get("type") == "deleted":
+        return (
+            fingerprint.get("mode") == "deleted" and fingerprint.get("sha256") is None and mtime is None
+        )
+    return (
+        fingerprint.get("mode") in GATE_FILE_MODES.get(fingerprint.get("type"), ())
+        and _valid_sha256(fingerprint.get("sha256"))
+        and isinstance(mtime, int)
+        and not isinstance(mtime, bool)
+    )
+
+
+def _safe_gate_relative(value):
+    if not isinstance(value, str) or not value:
+        return False
+    pure = PurePosixPath(value)
+    return not pure.is_absolute() and ".." not in pure.parts
+
+
+def _valid_gate_operation(operation):
+    if not isinstance(operation, dict):
+        return False
+    kind = operation.get("kind")
+    expected = {"kind", "path", "source"} if kind in {"rename", "copy"} else {"kind", "path"}
+    return (
+        kind in GATE_OPERATION_KINDS
+        and set(operation) == expected
+        and _safe_gate_relative(operation.get("path"))
+        and ("source" not in operation or _safe_gate_relative(operation["source"]))
+    )
+
+
+def _gate_operation_key(operation):
+    return operation["path"], operation["kind"], operation.get("source", "")
+
+
+def _valid_gate_operations(operations):
+    return all(_valid_gate_operation(operation) for operation in operations) and operations == sorted(
+        operations, key=_gate_operation_key
+    )
+
+
+def _valid_string_list(values):
+    return isinstance(values, list) and all(
+        isinstance(value, str) and bool(value.strip()) for value in values
+    )
+
+
+def _valid_commit_gate(document):
+    if (
+        not isinstance(document, dict)
+        or document.get("version") != 1
+        or isinstance(document.get("version"), bool)
+        or not isinstance(document.get("repository_root"), str)
+        or not document["repository_root"]
+        or not isinstance(document.get("files"), dict)
+        or not isinstance(document.get("operations"), list)
+        or not _valid_gate_operations(document["operations"])
+    ):
+        return False
+    if any(
+        not _safe_gate_relative(relative) or not _valid_gate_fingerprint(fingerprint)
+        for relative, fingerprint in document["files"].items()
+    ):
+        return False
+    verification_file = document.get("verification_file")
+    verification_digest = document.get("verification_file_sha256")
+    if (
+        not _valid_gate_fingerprint(verification_file)
+        or verification_file.get("type") != "file"
+        or not _valid_sha256(verification_digest)
+        or verification_file.get("sha256") != verification_digest
+    ):
+        return False
+    verification = document.get("verification")
+    if not isinstance(verification, dict):
+        return False
+    source = verification.get("source")
+    channels = verification.get("channels")
+    automated_runs = verification.get("automated_runs")
+    failed_runs = verification.get("failed_automated_runs")
+    residual_risks = verification.get("residual_risks")
+    return (
+        verification.get("verdict") == "pass"
+        and source in SOURCES
+        and _valid_string_list(channels)
+        and bool(channels)
+        and _valid_string_list(automated_runs)
+        and _valid_string_list(failed_runs)
+        and _valid_string_list(residual_risks)
+        and verification.get("blockers") == []
+        and (
+            (source == "automated" and bool(automated_runs) and not failed_runs)
+            or (
+                source == "user_confirmed"
+                and not automated_runs
+                and bool(failed_runs)
+                and bool(residual_risks)
+            )
+        )
+    )
