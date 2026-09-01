@@ -383,9 +383,25 @@ def write_final_report(run_id: str, home=None) -> Path:
     return _atomic_write(_run_dir(run_id, home) / "final-report.md", report)
 
 
+# Kept in run_state.py order because report.py is also loaded as a standalone library.
+HANDOFF_STAGES = (
+    ("issue-report", "입력 정리"),
+    ("reproduction", "재현"),
+    ("diagnosis", "진단"),
+    ("implementation", "구현"),
+    ("verification", "검증"),
+    ("publication-approval", "게시 승인"),
+)
+HANDOFF_MARKS = {"pending": " ", "in_progress": "~", "done": "x", "failed": "!", "blocked": "-", "skipped": "/", "unknown": "?"}
+HANDOFF_TERMINAL_STATUSES = {"done", "skipped"}
+HANDOFF_STAGE_ACTIONS = {"failed": "실패 상태 해소 후 재시도", "blocked": "차단 해소 후 재개", "unknown": "알 수 없는 상태를 복구"}
+SHARED_ARTIFACTS = ("state.json", "metrics.json", "issue-report.json", "reproduction.json", "diagnosis.json")
+REPOSITORY_ARTIFACTS = ("implementation.json", "verification.json", "commit-gate.json")
+
 RECORDED = "기록됨"
 DAMAGED = "손상됨"
 UNSAFE = "안전하지 않은 경로"
+INVALID = "유효하지 않음"
 
 HANDOFF_MAX_JSON_BYTES = 4 * 1024 * 1024
 HANDOFF_MAX_JSON_NESTING = 256
@@ -677,3 +693,380 @@ def _valid_commit_gate(document):
             )
         )
     )
+
+
+def _dict_field(document, key):
+    value = document.get(key) if isinstance(document, dict) else None
+    return value if isinstance(value, dict) else {}
+
+
+def _list_field(document, key):
+    value = document.get(key) if isinstance(document, dict) else None
+    return value if isinstance(value, list) else []
+
+
+def _handoff_list_values(document, key):
+    return [_handoff_value(value) for value in _list_field(document, key) if isinstance(value, str) and value]
+
+
+def _category_lines(items):
+    return [f"- {_handoff_value(item)}" for item in items] if items else [f"- {NONE_TEXT}"]
+
+
+def _usable_lifecycle(document):
+    stages = document.get("stages") if isinstance(document, dict) else None
+    return isinstance(stages, dict) and all(isinstance(stage, dict) for stage in stages.values())
+
+
+def _stage_items(state):
+    stages = state["stages"]
+    labels = dict(HANDOFF_STAGES)
+    names = [name for name, _ in HANDOFF_STAGES]
+    names.extend(sorted(name for name in stages if name not in labels))
+    items = []
+    for name in names:
+        stage = stages.get(name, {})
+        raw = stage.get("status", "pending")
+        if name not in labels and "status" not in stage:
+            status, display, actionable = "unknown", "informational (status 미기록)", False
+        elif isinstance(raw, str) and raw in HANDOFF_MARKS and raw != "unknown":
+            status, display, actionable = raw, raw, True
+        else:
+            status, display, actionable = "unknown", f"unknown ({_handoff_value(raw)})", True
+        items.append({"name": name, "label": labels.get(name, name), "status": status, "status_text": display, "actionable": actionable})
+    return items
+
+
+def _stage_text(item):
+    return f"{_handoff_value(item['name'])} — {_handoff_value(item['label'])}"
+
+
+def _next_stage_action(item):
+    note = HANDOFF_STAGE_ACTIONS.get(item["status"])
+    return f"{_stage_text(item)} ({note})" if note else _stage_text(item)
+
+
+def _valid_resolution(state):
+    value = state.get("resolved_at")
+    return isinstance(value, int) and not isinstance(value, bool) and state.get("resolution_source") in SOURCES
+
+
+def _apply_artifact_stage_overrides(items, names, reproduction, diagnosis, implementations, verifications):
+    overrides = {}
+
+    def mark(stage, status, source):
+        existing = overrides.get(stage)
+        if existing is None or status == "blocked" or existing[0] != "blocked":
+            overrides[stage] = status, source
+
+    if isinstance(reproduction, dict) and reproduction.get("status") in {"blocked", "failed"}:
+        mark("reproduction", reproduction["status"], "reproduction.json")
+    if isinstance(diagnosis, dict) and diagnosis.get("status") == "blocked":
+        mark("diagnosis", "blocked", "diagnosis.json")
+    for name in names:
+        if isinstance(implementations[name], dict) and implementations[name].get("status") == "blocked":
+            mark("implementation", "blocked", f"repositories/{name}/implementation.json")
+        verification = verifications[name]
+        if not isinstance(verification, dict):
+            continue
+        source = f"repositories/{name}/verification.json"
+        if _list_field(verification, "blockers"):
+            mark("verification", "blocked", source)
+        elif verification.get("verdict") == "fail":
+            mark("verification", "failed", source)
+    for item in items:
+        if item["name"] in overrides:
+            item["status"], source = overrides[item["name"]]
+            item["status_text"] = f"{item['status']} ({source} 근거)"
+            item["actionable"] = True
+
+
+def _handoff_context(issue_report, run_id):
+    issue = _dict_field(issue_report, "issue")
+    environment = _dict_field(issue_report, "environment")
+    lines = [
+        f"- 이슈: {_handoff_value(issue.get('id'))}",
+        f"- 환경 이름: {_handoff_value(environment.get('name'))}",
+        f"- 환경 대상: {_handoff_value(environment.get('target'))}",
+    ]
+    repositories = [value for value in _list_field(issue_report, "repositories") if isinstance(value, dict)]
+    for repository in repositories:
+        name = repository.get("name")
+        worktree = f"`<ISSUE_TUNER_HOME>/worktrees/{run_id}/{name}`" if isinstance(name, str) and SAFE_REPO_NAME.fullmatch(name) else UNRECORDED
+        lines.extend(
+            [
+                f"- 저장소: {_handoff_value(name)}",
+                f"  - 브랜치: {_handoff_value(repository.get('branch'))}",
+                f"  - 소스 저장소: {_handoff_value(repository.get('path'))}",
+                f"  - 작업 트리: {worktree}",
+            ]
+        )
+    if not repositories:
+        lines.append(f"- 저장소/브랜치/소스 저장소/작업 트리: {UNRECORDED}")
+    return lines
+
+
+def _repository_names(run_dir, issue_report):
+    names = set(_repositories(run_dir))
+    names.update(
+        value["name"]
+        for value in _list_field(issue_report, "repositories")
+        if isinstance(value, dict)
+        and isinstance(value.get("name"), str)
+        and SAFE_REPO_NAME.fullmatch(value["name"])
+    )
+    return sorted(names)
+
+
+def _publication_safety(status, gate):
+    if status == "skipped":
+        if gate == UNRECORDED:
+            return "publication-approval skipped — 게시 불필요; commit-gate.json 미기록은 정상이다."
+        return f"publication-approval skipped — 게시 불필요; commit-gate.json {gate} 상태는 근거로만 검토한다."
+    if status == "done":
+        if gate == RECORDED:
+            return (
+                "commit-gate.json 기록됨 — state.json상 완료된 게시 승인을 반복하지 않는다. "
+                "gate만으로 게시 완료를 추론하지 않으며 게시 전 commit_gate.check가 필요하다."
+            )
+        if gate == INVALID:
+            return "commit-gate.json 유효하지 않음 — commit_gate.record로 재생성한 뒤 commit_gate.check 전에는 게시하지 않는다."
+        return (
+            f"commit-gate.json {gate} — state.json과 gate 근거가 일치하지 않는다. "
+            "게시 완료를 추론하지 않으며 gate 복구 후 commit_gate.check 전에는 게시하지 않는다."
+        )
+    if status in {"pending", "in_progress"}:
+        if gate == RECORDED:
+            return (
+                "commit-gate.json 기록됨 — 구조 확인만 완료; 게시 직전 commit_gate.check가 필요하며 "
+                "게시 완료 증거가 아니다."
+            )
+        if gate == UNRECORDED:
+            return "commit-gate.json 미기록 — commit_gate.record 후 게시 직전 commit_gate.check가 필요하다."
+        return (
+            f"commit-gate.json {gate} — commit_gate.record로 재생성한 뒤 "
+            "게시 직전 commit_gate.check 전에는 게시하지 않는다."
+        )
+    return (
+        f"commit-gate.json {gate} — 게시 단계 상태를 직접 확인하고 "
+        "게시 전 commit_gate.check를 통과해야 한다."
+    )
+
+
+def handoff_report(run_id: str, home=None) -> str:
+    directory = _run_dir(run_id, home)
+    artifacts = {name: _read_handoff_json(directory / name) for name in SHARED_ARTIFACTS}
+    state_document, metrics, issue_report, reproduction, diagnosis = (
+        artifacts[name][0] for name in SHARED_ARTIFACTS
+    )
+    lifecycle = _usable_lifecycle(state_document)
+    state = state_document if lifecycle else {}
+    metrics = metrics if lifecycle and isinstance(metrics, dict) else {}
+    items = _stage_items(state) if lifecycle else []
+    names = _repository_names(directory, issue_report)
+    for name in names:
+        for filename in REPOSITORY_ARTIFACTS:
+            relative = f"repositories/{name}/{filename}"
+            artifacts[relative] = _repository_json(directory, name, filename)
+        gate_path = f"repositories/{name}/commit-gate.json"
+        if artifacts[gate_path][1] == RECORDED and not _valid_commit_gate(artifacts[gate_path][0]):
+            artifacts[gate_path] = None, INVALID
+    implementations = {name: artifacts[f"repositories/{name}/implementation.json"][0] for name in names}
+    verifications = {name: artifacts[f"repositories/{name}/verification.json"][0] for name in names}
+    if lifecycle:
+        _apply_artifact_stage_overrides(
+            items, names, reproduction, diagnosis, implementations, verifications
+        )
+    current_item = next(
+        (item for item in items if item["actionable"] and item["status"] not in HANDOFF_TERMINAL_STATUSES), None
+    )
+    finished = lifecycle and state.get("status") == "finished"
+    if not lifecycle:
+        current = next_task = UNRECORDED
+    elif finished:
+        current = next_task = NONE_TEXT
+    elif current_item:
+        current, next_task = _stage_text(current_item), _next_stage_action(current_item)
+    else:
+        current = NONE_TEXT
+        next_task = "finish — 실행 종료" if _valid_resolution(state) else "resolve — 해결 상태 기록"
+
+    completed, failed, blocked, risks = [], [], [], []
+    for item in items:
+        if item["status"] in HANDOFF_TERMINAL_STATUSES:
+            suffix = (
+                " (게시 불필요로 생략)"
+                if item["status"] == "skipped" and item["name"] == "publication-approval"
+                else " (불필요로 생략)" if item["status"] == "skipped" else ""
+            )
+            completed.append(_stage_text(item) + suffix)
+        elif item["status"] == "failed":
+            failed.append(_stage_text(item))
+        elif item["status"] == "blocked":
+            blocked.append(_stage_text(item))
+        elif item["status"] == "unknown" and item["actionable"]:
+            blocked.append(f"{_stage_text(item)} — 알 수 없는 stage status: {item['status_text']}")
+
+    artifact_blockers = []
+    for relative, document, failed_status in (
+        ("reproduction.json", reproduction, True),
+        ("diagnosis.json", diagnosis, True),
+        *((f"repositories/{name}/implementation.json", implementations[name], False) for name in names),
+    ):
+        entries = [f"{relative} — {value}" for value in _handoff_list_values(document, "blockers")]
+        blocked.extend(entries)
+        artifact_blockers.extend(entries)
+        status = document.get("status") if isinstance(document, dict) else None
+        if status == "blocked":
+            blocked.append(f"{relative} — status=blocked")
+        elif failed_status and status == "failed":
+            failed.append(f"{relative} — status=failed")
+    for name in names:
+        relative = f"repositories/{name}/verification.json"
+        document = verifications[name]
+        entries = [f"{relative} — {value}" for value in _handoff_list_values(document, "blockers")]
+        blocked.extend(entries)
+        artifact_blockers.extend(entries)
+        failed.extend(
+            f"{relative} — {value}"
+            for value in _handoff_list_values(document, "failed_automated_runs")
+        )
+        risks.extend(
+            f"{relative} — {value}" for value in _handoff_list_values(document, "residual_risks")
+        )
+        if isinstance(document, dict) and document.get("verdict") == "fail":
+            failed.append(f"{relative} — verdict=fail")
+    damaged = [path for path, (_, status) in artifacts.items() if status == DAMAGED]
+    unsafe = [path for path, (_, status) in artifacts.items() if status == UNSAFE]
+    blocked.extend(f"{path} — {DAMAGED}; 산출물 재생성 필요" for path in damaged)
+    blocked.extend(f"{path} — {UNSAFE}; 경로 복구 필요" for path in unsafe)
+    blocked.extend(
+        f"{path} — {INVALID}; 재생성 필요"
+        for path, (_, status) in artifacts.items()
+        if status == INVALID
+    )
+    if not lifecycle:
+        blocked.append("state.json — 실행 lifecycle을 신뢰할 수 없음; state.json 복구 필요")
+
+    pending, confirmed = [], []
+    if lifecycle and not finished:
+        paused = state.get("status") == "paused"
+        current_blocked = current_item is not None and current_item["status"] == "blocked"
+        if paused:
+            pending.append("run status=paused — 사용자 조치 후 run_state.resume 필요")
+        if current_blocked:
+            pending.append(f"{_stage_text(current_item)} — 차단 해소 및 재개 확인 필요")
+        if (
+            current_item
+            and current_item["name"] == "publication-approval"
+            and current_item["status"] in {"pending", "in_progress"}
+        ):
+            pending.append("publication-approval — 게시 승인: 명확한 사용자 게시 승인 필요")
+        if paused or current_blocked:
+            pending.extend(f"사용자 조치 필요 — {value}" for value in artifact_blockers)
+    if isinstance(reproduction, dict) and reproduction.get("source") == "user_confirmed":
+        confirmed.append(f"reproduction.json source=user_confirmed — {_handoff_value(reproduction.get('scenario'))}")
+    confirmed.extend(
+        f"repositories/{name}/verification.json source=user_confirmed"
+        for name in names
+        if isinstance(verifications[name], dict)
+        and verifications[name].get("source") == "user_confirmed"
+    )
+    if lifecycle and state.get("resolution_source") == "user_confirmed":
+        confirmed.append("state.json resolution_source=user_confirmed")
+
+    inventory = [f"- {path}: {artifacts[path][1]}" for path in SHARED_ARTIFACTS]
+    for name in names:
+        inventory.extend(
+            f"- repositories/{name}/{filename}: {artifacts[f'repositories/{name}/{filename}'][1]}"
+            for filename in REPOSITORY_ARTIFACTS
+        )
+    if not names:
+        inventory.extend(f"- {filename}: {UNRECORDED}" for filename in REPOSITORY_ARTIFACTS)
+    verification_lines = [f"- issue-report.json 확인 채널: {value}" for value in _handoff_list_values(_dict_field(issue_report, "verification"), "channels")]
+    changed_lines = []
+    for name in names:
+        path = f"repositories/{name}/implementation.json"
+        verification_lines.extend(
+            f"- {path} RED: {value}"
+            for value in _handoff_list_values(implementations[name], "red_runs")
+        )
+        changed_lines.extend(
+            f"- {path}: {value}"
+            for value in _handoff_list_values(implementations[name], "changed_files")
+        )
+        path = f"repositories/{name}/verification.json"
+        for label, key in (
+            ("확인 채널", "channels"),
+            ("실행/결과", "automated_runs"),
+            ("실패 결과", "failed_automated_runs"),
+        ):
+            verification_lines.extend(
+                f"- {path} {label}: {value}"
+                for value in _handoff_list_values(verifications[name], key)
+            )
+    verification_lines = verification_lines or [f"- {UNRECORDED}"]
+    changed_lines = changed_lines or [f"- {UNRECORDED}"]
+    if lifecycle:
+        checklist = [
+            f"- [{HANDOFF_MARKS[item['status']]}] {_handoff_value(item['label'])} ({_handoff_value(item['name'])}) — {_handoff_value(item['status_text'])}"
+            for item in items]
+        publication = next(item["status"] for item in items if item["name"] == "publication-approval")
+    else:
+        checklist, publication = ["- [?] state.json lifecycle — unknown"], None
+    if not lifecycle:
+        resume = [
+            "- state.json을 복구하고 lifecycle 상태를 검증하기 전에는 재개·종료·게시를 판단하지 않는다.",
+            "- 근거 산출물은 읽기 전용으로 확인하고 누락된 lifecycle 값을 추론하지 않는다.",
+        ]
+    elif finished:
+        resume = [
+            "- run status=finished terminal — 읽기 전용 근거 검토만 수행한다.",
+            "- 실패·차단·위험 기록은 과거 evidence로 보존하며 새 조치 지시로 해석하지 않는다.",
+        ]
+    else:
+        resume = [
+            "- 이 보고서를 먼저 읽고, 위 근거 산출물 JSON을 직접 확인한다.",
+            f"- state.json의 현재 단계와 전체 체크리스트를 기준으로 `{_handoff_value(next_task)}`부터 재개한다.",
+            "- 미기록 산출물의 내용은 추론하지 말고 해당 단계에서 새로 생성·검증한다.",
+            "- 검증 명령과 결과는 verification.json 및 implementation.json의 기록만 사용한다.",
+        ]
+        if damaged:
+            resume.append("- 손상된 산출물을 재생성하고 계약 검증을 통과하기 전에는 다음 단계로 진행하지 않는다.")
+        if unsafe:
+            resume.append("- 안전하지 않은 산출물 경로를 정상 regular file 경로로 복구하기 전에는 진행하지 않는다.")
+        resume.extend(
+            f"- {name} 게시 안전 상태: "
+            f"{_publication_safety(publication, artifacts[f'repositories/{name}/commit-gate.json'][1])}"
+            for name in names
+        )
+    lines = [
+        "# 실행 인계 보고서",
+        "",
+        f"- run: {_handoff_value(run_id)}",
+        f"- 실행 상태: {_handoff_value(state.get('status')) if lifecycle else UNRECORDED}",
+        f"- 현재 단계: {_handoff_value(current, NONE_TEXT)}",
+        f"- 다음 실행 가능 작업: {_handoff_value(next_task, NONE_TEXT)}",
+    ]
+    for heading, body in (
+        ("저장소와 환경", _handoff_context(issue_report, run_id)),
+        ("검증 명령과 결과", verification_lines),
+        ("변경 파일", changed_lines),
+        ("완료 항목", _category_lines(completed)),
+        ("실패 항목", _category_lines(failed)),
+        ("잔여 위험", _category_lines(risks)),
+        ("차단 항목", _category_lines(blocked)),
+        ("사용자 확인 필요", _category_lines(pending)),
+        ("사용자 확인 근거", _category_lines(confirmed)),
+        ("시간", _time_lines(state, metrics)),
+        ("전체 체크리스트", checklist),
+        ("근거 산출물", inventory),
+        ("재개 방법", resume),
+    ):
+        lines.extend(["", f"## {heading}", "", *body])
+    return "\n".join(lines)
+
+
+def write_handoff_report(run_id: str, home=None) -> Path:
+    directory = _run_dir(run_id, home)
+    return _atomic_write(directory / "handoff-report.md", handoff_report(run_id, home), reject_symlink=True)
