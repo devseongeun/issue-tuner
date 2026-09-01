@@ -201,5 +201,18 @@ class HandoffReportTest(unittest.TestCase):
         self.assertEqual(returned, target.resolve()); self.assertTrue(target.read_text(encoding="utf-8").startswith("# 실행 인계 보고서"))
         self.assertEqual([path for path in run.iterdir() if path.name.startswith("tmp")], [])
 
+    def test_atomic_output_refuses_a_symlinked_report_path_and_keeps_the_target(self):
+        # 인계 보고서 경로가 심볼릭 링크로 바꿔치기되면 대상 파일을 덮어쓰지 않고 거부해야 한다.
+        home, run = self.build(with_issue=False)
+        outside = home / "outside.md"
+        outside.write_text("keep", encoding="utf-8")
+        target = run / "handoff-report.md"
+        target.symlink_to(outside)
+        with self.assertRaisesRegex(ValueError, "must not be a symlink"):
+            report.write_handoff_report("run-6", home)
+        self.assertEqual(outside.read_text(encoding="utf-8"), "keep")
+        self.assertTrue(target.is_symlink())
+        self.assertEqual([path for path in run.iterdir() if path.name.startswith("tmp")], [])
+
 if __name__ == "__main__":
     unittest.main()
