@@ -1,0 +1,39 @@
+{
+  "name": "issue-tuner",
+  "displayName": "Issue Tuner",
+  "version": "0.1.0",
+  "description": "재현 가능한 문제를 재현, 진단, 수정하고 독립 검증하는 안전한 Claude Code 워크플로",
+  "author": {
+    "name": "Seongeun Kim",
+    "url": "https://github.com/devseongeun"
+  },
+  "homepage": "https://github.com/devseongeun/issue-tuner",
+  "repository": "https://github.com/devseongeun/issue-tuner",
+  "license": "MIT",
+  "keywords": [
+    "issue",
+    "defect",
+    "debugging",
+    "jira",
+    "claude-code"
+  ],
+  "hooks": "./adapters/claude/hooks.json",
+  "mcpServers": {
+    "serena": {
+      "command": "uvx",
+      "args": [
+        "-p",
+        "3.13",
+        "--from",
+        "serena-agent==1.5.3",
+        "serena",
+        "start-mcp-server",
+        "--context",
+        "claude-code",
+        "--project-from-cwd",
+        "--open-web-dashboard",
+        "false"
+      ]
+    }
+  }
+}

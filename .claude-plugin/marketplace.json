@@ -1,0 +1,13 @@
+{
+  "name": "issue-tuner",
+  "owner": {"name": "Seongeun Kim", "url": "https://github.com/devseongeun"},
+  "metadata": {"description": "Issue Tuner Claude Code marketplace"},
+  "plugins": [
+    {
+      "name": "issue-tuner",
+      "source": "./plugins/issue-tuner",
+      "description": "재현, 진단, 최소 수정과 독립 검증을 거쳐 사용자 승인 후 Draft PR 또는 MR을 만듭니다.",
+      "category": "development"
+    }
+  ]
+}

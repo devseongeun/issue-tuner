@@ -1,0 +1,30 @@
+{
+  "description": "Issue Tuner: run 산출물 쓰기 범위 제한, 역할 경계, production read-only",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/adapters/claude/hook.py", "session-start"],
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "^(Write|Edit|MultiEdit|NotebookEdit|Bash|mcp__claude-in-chrome__.*)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/adapters/claude/hook.py", "pre-tool-use"],
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,18 +1,18 @@
 # Issue Tuner
 
-Issue Tuner는 Codex에서 이슈 재현부터 Draft PR/MR 준비까지 이어 주는 Marketplace Plugin입니다. 현재 Codex 기준으로 만들었으며 Claude 지원은 준비 중입니다.
+Issue Tuner는 이슈 재현부터 Draft PR/MR 준비까지 이어 주는 Marketplace Plugin입니다. Codex 기준으로 설계했고, 같은 JSON 계약과 Python 안전 게이트를 공유하는 Claude 지원(Claude Code plugin)을 함께 제공합니다.
 
 Jira connector가 설치되어 있으면 Jira 키나 URL로 이슈를 조회합니다. connector가 없을 때는 Issue Report Form JSON을 입력받습니다. Jira에 종속된 도구는 아닙니다.
 
 ## 지원 범위
 
-- macOS의 Codex
+- macOS의 Codex와 Claude Code
 - Jira 키·URL 또는 범용 Issue Report Form
 - Python 표준 라이브러리로 동작하는 안전 게이트
 - 저장소별 격리 worktree, 검증 결과, commit gate, Draft PR/MR
 - 선택적 Serena MCP: `uvx`가 첫 사용 시 자동 준비
 
-UI 검증에는 Codex host의 `Computer Use`를 먼저 씁니다. 사용할 수 없거나 차단되면 자동화 실패를 기록하고 **사용자 직접** 재현 또는 검증을 요청합니다. 사용자가 명확하게 확인하면 `user_confirmed` 근거와 한계를 남깁니다. 재현 확인만으로 게시가 승인되지는 않습니다.
+UI 검증에는 Codex host의 `Computer Use`, Claude Code에서는 세션에 연결된 Claude in Chrome을 먼저 씁니다. 사용할 수 없거나 차단되면 자동화 실패를 기록하고 **사용자 직접** 재현 또는 검증을 요청합니다. 사용자가 명확하게 확인하면 `user_confirmed` 근거와 한계를 남깁니다. 재현 확인만으로 게시가 승인되지는 않습니다.
 
 ## 처리 흐름
 
@@ -20,7 +20,9 @@ UI 검증에는 Codex host의 `Computer Use`를 먼저 씁니다. 사용할 수 
 
 ## 설치
 
-필수 도구는 Git, Python 3, Codex, `uv`입니다.
+필수 도구는 Git, Python 3, `uv`, 그리고 Codex 또는 Claude Code입니다.
+
+### Codex
 
 ```sh
 brew install uv
@@ -30,13 +32,26 @@ codex plugin marketplace add "$PWD"
 codex plugin add issue-tuner@issue-tuner
 ```
 
-`.mcp.json`의 Serena는 선택 기능입니다. Codex가 MCP를 시작할 때 `uvx`가 고정된 버전을 준비하므로 전역 설치는 필요하지 않습니다. Serena를 쓸 수 없으면 Skill은 Codex 검색과 `rg`로 작업을 이어 가되 근거 수준을 낮춰 기록합니다.
+### Claude Code
+
+Claude Code 세션 안에서 다음을 실행합니다.
+
+```text
+/plugin marketplace add devseongeun/issue-tuner
+/plugin install issue-tuner@issue-tuner
+```
+
+로컬 clone을 쓰려면 `claude plugin marketplace add "$PWD"` 뒤 `claude plugin install issue-tuner@issue-tuner`를 실행합니다. 설치 후 새 세션을 시작하거나 `/reload-plugins`를 실행하세요. Claude Code에서 달라지는 점은 [Claude adapter 문서](plugins/issue-tuner/adapters/claude/README.md)에 정리했습니다.
+
+`.mcp.json`의 Serena는 선택 기능입니다. Codex나 Claude Code가 MCP를 시작할 때 `uvx`가 고정된 버전을 준비하므로 전역 설치는 필요하지 않습니다. Serena를 쓸 수 없으면 Skill은 host 검색(Codex search 또는 Claude Code Grep)과 `rg`로 작업을 이어 가되 근거 수준을 낮춰 기록합니다.
 
 ## 사용
 
-Codex에 Jira 키나 URL을 전달합니다. [`plugins/issue-tuner/examples/issue-report.json`](plugins/issue-tuner/examples/issue-report.json)을 복사해 값을 채운 뒤 다음처럼 요청해도 됩니다.
+Codex나 Claude Code에 Jira 키나 URL을 전달합니다. [`plugins/issue-tuner/examples/issue-report.json`](plugins/issue-tuner/examples/issue-report.json)을 복사해 값을 채운 뒤 다음처럼 요청해도 됩니다.
 
 > `$issue-tuner`로 이 Issue Report를 재현하고 진단해줘.
+
+Claude Code에서는 `/issue-tuner:issue-tuner`로 Skill을 직접 부르거나 같은 요청을 그대로 하면 됩니다.
 
 Issue Tuner는 `Reproducer` → `Diagnoser` → `Implementer` → `Verifier`로 역할을 나눠 재현, 진단, 최소 수정, 독립 검증을 수행합니다.
 

@@ -43,9 +43,19 @@ class PublicDocsTests(unittest.TestCase):
             "Diagnoser",
             "Implementer",
             "Verifier",
+            "Claude Code",
+            "/plugin install issue-tuner@issue-tuner",
+            "Claude in Chrome",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, readme)
+        self.assertNotIn("준비 중", readme)
+
+        adapter = (ROOT / "plugins/issue-tuner/adapters/claude/README.md").read_text(encoding="utf-8")
+        for phrase in ("Codex와의 차이", "설치", "bind", "Claude in Chrome", "권한 범위"):
+            with self.subTest(adapter_phrase=phrase):
+                self.assertIn(phrase, adapter)
+        self.assertNotIn("자리입니다", adapter)
         self.assertNotIn("AIOSS", readme)
 
         combined = "\n".join(

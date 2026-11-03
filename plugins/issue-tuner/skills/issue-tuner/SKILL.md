@@ -9,6 +9,11 @@ description: Use when Jira 키·URL 또는 Issue Report로 재현 가능한 버�
 
 run_state.py, git_context.py, runtime.py, publish.py, report.py만 library-only다. `commit_gate.py`는 CLI다; `run_state.create/pause/resume/resolve/finish`, `git_context.detect/create_worktree`, `runtime.start_runtime/stop_owned_process`, `commit_gate.record/check`, `publish.host_kind/draft_command/review_budget/split_plan/render_budget`, `report.handoff_report/write_handoff_report`, `report.final_report/write_final_report`를 쓰고 모든 return과 error를 확인한다.
 
+## Host
+
+- Codex: 이 문서를 그대로 따른다.
+- Claude Code: `<plugin-root>`는 `${CLAUDE_PLUGIN_ROOT}`이다. 시작 전에 `<plugin-root>/skills/issue-tuner/references/claude-code.md`를 읽고 역할 subagent, `python3 "<plugin-root>/adapters/claude/issue_tuner_claude.py"` CLI, Claude in Chrome 대응, 권한 범위, 세션 재개를 그 대응표대로 수행한다. workflow, gate, 승인, production 규칙은 아래와 같다.
+
 ## Workflow
 
 1. Jira 키·URL은 Jira connector, 없으면 `Issue Report Form`으로 받는다. 누락값을 만들지 말고 `<run>/issue-report.json`으로 정규화해 `python3 <plugin-root>/scripts/validate_contract.py issue-report <run>/issue-report.json`을 실행한다.
